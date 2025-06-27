@@ -68,46 +68,7 @@ class MdpKernel:
         r = np.floor(alpha*B)/(np.sum(w)+1e-10) * w
         return r
 
-    # ------------------------------------------------------------
-    # 1) Reward‑maximising value iteration (default in RL texts)
-    # ------------------------------------------------------------
     def optimize_policy(self, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
-        """Compute an *optimal* **deterministic** policy that **maximises**
-        expected discounted return via **value iteration**.
-
-        Returns
-        -------
-        V : np.ndarray of shape (N_states,)
-            Optimal state‑value function.
-        policy : np.ndarray of ints, shape (N_states,)
-            Action indices implementing the greedy policy.
-        """
-        V = np.zeros(self.N_states)  # initial guess
-
-        for _ in range(max_iterations):
-            delta = 0.0
-            for s in range(self.N_states):
-                # Bellman optimality backup for maximisation
-                q = [self.getReward(s, a) + gamma * np.dot(self.getTransition(a)[s], V)
-                     for a in range(self.N_actions)]
-                best_q = min(q)
-                delta = max(delta, abs(best_q - V[s]))
-                V[s] = best_q
-            if delta < theta:
-                break
-
-        # Greedy policy extraction
-        policy = np.empty(self.N_states, dtype=int)
-        for s in range(self.N_states):
-            q = [self.getReward(s, a) + gamma * np.dot(self.getTransition(a)[s], V)
-                 for a in range(self.N_actions)]
-            policy[s] = int(np.argmax(q))
-        return V, policy
-
-    # ------------------------------------------------------------
-    # 2) Cost‑minimising value iteration (new!)
-    # ------------------------------------------------------------
-    def minimize_policy(self, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
         """Compute an *optimal* deterministic policy that **minimises** the
         expected discounted sum of rewards (i.e. treats rewards as *costs*).
 

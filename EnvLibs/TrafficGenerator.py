@@ -9,34 +9,62 @@ class TrafficGenerator:
         self.N_user = params['N_user']
         self.LEN_window = params['LEN_window']
         self.randomState = params['randomSeed']
-        self.initialState = None
-        self.N_states = None
+        self.N_states = self.LEN_window+1
+        #--------------------------------
         self.userStates = None
-        self.trafficData = None
-        self.initialize()
+        self.userStatePivots = None
+        self.trafficDataTrain = None
+        self.trafficDataTest = None
+        self.activeTrafficData = None
+        self.M_train = None
+        self.M_test = None
+        self.M_active = None
+        self.mode = None
+        self.type = None
 
-    def initialize(self):
-        self.M_user = generate_random_transition_matrix(self.LEN_window+1, random_state=self.randomState)
-        self.N_states = len(self.M_user)
+    def selectModeAndType(self, mode="train", type="markov"):
+        # mode: train, test 
+        # type: markov, data
+        (self.mode, self.type) = (mode, type)
+        if mode == "test":
+            self.activeTrafficData = self.trafficDataTest  
+            self.M_active = self.M_test
+        else:
+            self.activeTrafficData = self.trafficDataTrain
+            self.M_active = self.M_train
         self.userStates = np.random.randint(0, self.N_states, (self.N_user, ))
-        
+        self.userStatePivots = np.random.randint(0, len(self.activeTrafficData)-1, (self.N_user, ))
+
     def updateTraffic(self):
-        for i in range(self.N_user):
-            self.userStates[i] = generate_next_state(self.M_user, self.userStates[i])
-        return self.userStates
-    
-    def updateReadTraffic(self):
-        for i in range(self.N_user):
-            self.userStates[i] = self.trafficData[self.userStatePivots[i]]
-            self.userStatePivots[i] = (self.userStatePivots[i] + 1) % len(self.trafficData)
+        if self.type == "markov":
+            for i in range(self.N_user):
+                self.userStates[i] = generate_next_state(self.M_active, self.userStates[i]) 
+        elif self.type == "data":
+            for i in range(self.N_user):
+                self.userStates[i] = self.activeTrafficData[self.userStatePivots[i]]
+                self.userStatePivots[i] = (self.userStatePivots[i] + 1) % len(self.activeTrafficData)
+        else:
+            raise ValueError(f"Invalid mode or type: {self.mode}, {self.type}")
         return self.userStates
 
-    def registerDataset(self, trafficData):
-        self.trafficData = trafficData.astype(int)
-        self.M_user = compute_markov_transition_matrix(self.trafficData, self.LEN_window+1)
-        self.N_states = len(self.M_user)
-        self.userStates = np.random.randint(0, self.N_states, (self.N_user, ))
-        self.userStatePivots = np.random.randint(0, len(self.trafficData)-1, (self.N_user, ))
+    def registerDataset(self, trafficData, train_ratio=0.7):
+        if self.trafficDataTrain is None:
+            self.trafficDataTrain = trafficData[0:int(len(trafficData)*train_ratio)].astype(int)
+            self.trafficDataTest = trafficData[int(len(trafficData)*train_ratio):].astype(int)
+        else:
+            self.trafficDataTrain = np.concatenate((self.trafficDataTrain, trafficData[0:int(len(trafficData)*train_ratio)].astype(int)))
+            self.trafficDataTest = np.concatenate((self.trafficDataTest, trafficData[int(len(trafficData)*train_ratio):].astype(int)))
+        self.M_train = compute_markov_transition_matrix(self.trafficDataTrain, self.N_states)
+        self.M_test = compute_markov_transition_matrix(self.trafficDataTest, self.N_states)
+        self.selectModeAndType(mode="train", type="data")
+
+    def getM(self, mode="train"):
+        if mode == "train":
+            return self.M_train
+        elif mode == "test":
+            return self.M_test
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
 
 def generate_random_transition_matrix(N, alpha=None, random_state=None):
     if random_state is not None:

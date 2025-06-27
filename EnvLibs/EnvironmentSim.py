@@ -19,13 +19,14 @@ class Environment:
         self.trafficGenerator = trafficGenerator
         self.u = self.trafficGenerator.updateTraffic()
 
+    def selectMode(self, mode="train", type="markov"):
+        self.trafficGenerator.selectModeAndType(mode=mode, type=type)
+
     def updateStates(self):
         self.u = self.trafficGenerator.updateTraffic()
         return self.u.copy()
     
     def applyActions(self, w, r, M, alpha):
-        #u = self.trafficGenerator.updateTraffic()
-        #w = typeAllocator(self.u, self.LEN_window)
         countFailedType1, countActiveType1 = self.simulatorType1.step(self.u, w, r, alpha)
         countFailedType2, countActiveType2 = self.simulatorType2.step(self.u, w, M, alpha)
         self.failuresTotal += countFailedType1+countFailedType2
