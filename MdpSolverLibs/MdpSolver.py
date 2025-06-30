@@ -51,7 +51,7 @@ class MdpKernel:
         """Return state‑transition matrix ``P_a`` for action *a*."""
         return self.transitionTable[:, :, a]
    
-    def getActionFromObervation(self, uOrigin):
+    def predict(self, uOrigin):
         sOrigin = tuple_to_index(uOrigin, self.LEN_window+1)
         sAggregated = self.from_origin_to_aggregated_state(sOrigin)
         return self.getAction(sAggregated)

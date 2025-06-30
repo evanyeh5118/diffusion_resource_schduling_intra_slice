@@ -65,6 +65,10 @@ class TrafficGenerator:
             return self.M_test
         else:
             raise ValueError(f"Invalid mode: {mode}")
+        
+    def reset(self):
+        self.userStates = np.random.randint(0, self.N_states, (self.N_user, ))
+        self.userStatePivots = np.random.randint(0, len(self.activeTrafficData)-1, (self.N_user, ))
 
 def generate_random_transition_matrix(N, alpha=None, random_state=None):
     if random_state is not None:

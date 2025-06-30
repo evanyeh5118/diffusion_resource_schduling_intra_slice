@@ -24,6 +24,8 @@ class Environment:
 
     def updateStates(self):
         self.u = self.trafficGenerator.updateTraffic()
+        
+    def getStates(self):
         return self.u.copy()
     
     def applyActions(self, w, r, M, alpha):
@@ -42,4 +44,5 @@ class Environment:
         self.activeTotal = 0
         self.simulatorType1.reset()
         self.simulatorType2.reset()
+        self.trafficGenerator.reset()
 

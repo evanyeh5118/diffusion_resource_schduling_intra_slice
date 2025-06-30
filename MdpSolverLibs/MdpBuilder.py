@@ -16,7 +16,7 @@ class MdpFormulator:
         self.M_original = M_original
         self.N_states_original = len(self.M_original) # (=self.LEN_window+1)
         self.rewardKernel = RewardKernel(params)
-        self.alphaList = params['alphaList']
+        self.alphaList = np.linspace(params['alpha_range'][0], params['alpha_range'][1], params['discrete_alpha_steps'])
         #------------------------------------------------------------
         (self.N_states, self.N_actions) = (None, None)
         self.actionSpace = None
