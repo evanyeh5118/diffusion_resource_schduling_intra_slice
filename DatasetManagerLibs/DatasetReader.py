@@ -12,19 +12,14 @@ class DatasetReader:
     def configuration(self):
         self.readFileIndexsList = ["0", "1", "2", "3", "4","5","6","7","8","9","10"]
 
-    def readRawDataset(self, taskName):
-        self.dfRaw = None
-        for fileIndex in self.readFileIndexsList:
-            df_read = pd.read_csv(
-                f"{self.parentFolder}/{taskName}/exp{fileIndex}/motion.txt")
-            df_ms = processTimeseriesData(df_read)
-            if self.dfRaw is None:
-                self.dfRaw = df_ms
-            else:
-                self.dfRaw = concatenateDataframes(self.dfRaw, df_ms)
-        self.dfRaw = removeOutlier(self.dfRaw)
-        self.dfLibrary[taskName] = self.dfRaw
-        #self.dfRawNormal = nomalization(self.dfRaw)
+    def readRawDataset(self, filename, datasetLabel):
+        df_read = pd.read_csv(filename)
+        dfRaw = processTimeseriesData(df_read)
+        dfRaw = removeOutlier(dfRaw)
+        if datasetLabel not in self.dfLibrary:
+            self.dfLibrary[datasetLabel] = dfRaw
+        else:
+            self.dfLibrary[datasetLabel] = concatenateDataframes(self.dfLibrary[datasetLabel], dfRaw)
 
     def visualization(self, taskName, fingerName, idxsObv=1000, figsize=(10, 5)):
         if fingerName in ["Thumb", "Index", "Middle", "Center"] is False:
@@ -53,14 +48,6 @@ class DatasetReader:
         # Adjust layout
         plt.tight_layout()  # Ensures no overlap between subplots
         plt.show()
-
-def nomalization(df):
-    df_normalized = df.copy()
-    df_normalized.iloc[:,1:] = df_normalized.iloc[:,1:].apply(
-        lambda x: (x - x.min()) / (x.max() - x.min())
-    )
-    #df_normalized = df_normalized.iloc[:,:-9]
-    return df_normalized.copy()
 
 def removeOutlier(df):
     # 1. Calculate Q1, Q3, and IQR for each column
