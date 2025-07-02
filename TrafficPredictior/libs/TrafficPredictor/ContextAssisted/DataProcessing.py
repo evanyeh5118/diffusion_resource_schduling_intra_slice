@@ -51,31 +51,35 @@ def PreparingDatasetHelper(dataUnit, params):
         newLenSource = len(sources[0])
         newLenTarget = len(targets[0])
         # -----------------------------------------
-        # Interpolate traffic states to match the downsampled length
-        trafficStatesSource = [np.interp(
-            trafficState, 
-            np.linspace(0, lenSource+1, num=lenSource+1), 
-            np.linspace(0.0,  newLenSource+1, num = lenSource+1)
-        ) for trafficState in trafficStatesSource]
-        trafficStatesTarget = [np.interp(
-            trafficState, 
-            np.linspace(0, lenTarget+1, num=lenTarget+1), 
-            np.linspace(0.0, newLenTarget+1, num = lenTarget+1)
-        ) for trafficState in trafficStatesTarget]
+        # Scale traffic states to match the downsampled length
+        # Convert to float to ensure proper interpolation
+        trafficStatesSource = [float(trafficState) * newLenSource / lenSource for trafficState in trafficStatesSource]
+        trafficStatesTarget = [float(trafficState) * newLenTarget / lenTarget for trafficState in trafficStatesTarget]
 
-        
-       
+    trafficStatesSource = np.array(trafficStatesSource, dtype=np.float32)
+    trafficStatesTarget = np.array(trafficStatesTarget, dtype=np.float32)
     trafficClassesTarget = DiscretizedTraffic(trafficStatesTarget) #[0 ~ L]
+    
+    # Ensure all arrays have the correct shape and type
+    sources = np.array(sources, dtype=np.float32)
+    targets = np.array(targets, dtype=np.float32)
+    lastTranmittedContext = np.array(lastTranmittedContext, dtype=np.float32)
+    trafficStatesSource = np.array(trafficStatesSource, dtype=np.float32).reshape(-1,1)
+    trafficStatesTarget = np.array(trafficStatesTarget, dtype=np.float32).reshape(-1,1)
+    trafficClassesTarget = np.array(trafficClassesTarget, dtype=np.int64).reshape(-1,1)
+    transmissionsVector = np.array(transmissionsVector, dtype=np.float32)
+    sourcesNoSmooth = np.array(sourcesNoSmooth, dtype=np.float32)
+    
     return (
         (
-            np.array(sources), 
-            np.array(targets),
-            np.array(lastTranmittedContext),
-            np.array(trafficStatesSource).reshape(-1,1),
-            np.array(trafficStatesTarget).reshape(-1,1),
-            np.array(trafficClassesTarget).reshape(-1,1),
-            np.array(transmissionsVector),
-            np.array(sourcesNoSmooth)
+            sources, 
+            targets,
+            lastTranmittedContext,
+            trafficStatesSource,
+            trafficStatesTarget,
+            trafficClassesTarget,
+            transmissionsVector,
+            sourcesNoSmooth
         ),
         (newLenSource, newLenTarget)
     )

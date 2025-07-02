@@ -23,10 +23,13 @@ class Environment:
         self.trafficGenerator.selectModeAndType(mode=mode, type=type)
 
     def updateStates(self):
-        self.u = self.trafficGenerator.updateTraffic()
+        self.trafficGenerator.updateTraffic()
+        self.u, self.u_predicted = self.trafficGenerator.getUserStates()
+        self.u = self.u.astype(int)
+        self.u_predicted = self.u_predicted.astype(int)
         
     def getStates(self):
-        return self.u.copy()
+        return self.u.copy(), self.u_predicted.copy()
     
     def applyActions(self, w, r, M, alpha):
         countFailedType1, countActiveType1 = self.simulatorType1.step(self.u, w, r, alpha)

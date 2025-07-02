@@ -13,27 +13,7 @@ class DRLResourceSchedulingEnv(gym.Env):
     This environment wraps the MdpSchedule components and provides a standard
     Gym interface for RL agents to learn optimal resource allocation policies.
     """
-    
     metadata = {"render_modes": ["human"]}
-    '''
-    def __init__(
-        self,
-        n_users: int = 4,
-        len_window: int = 10,
-        r_bar: int = 4,
-        bandwidth: int = 40,
-        max_episode_steps: int = 1000,
-        action_mode: str = "full_action",  # "alpha_only", "full_action", or "discrete_alpha"
-        observation_mode: str = "full",   # "full", "aggregated"
-        alpha_range: Tuple[float, float] = (0.01, 1.0),
-        discrete_alpha_steps: int = 20,
-        random_seed: Optional[int] = None,
-        reward_mode: str = "packet_loss",  # "packet_loss", "mdp_reward"
-        traffic_data_path: Optional[str] = "Results/TrafficData/trafficData.pkl",  # NEW: Path to real traffic data
-        use_real_traffic: bool = True,  # NEW: Whether to use real traffic data
-        traffic_update_mode: str = "sequential"  # NEW: "markov" or "sequential"
-    ):
-    '''
     def __init__(
         self,
         simParams,
@@ -50,6 +30,7 @@ class DRLResourceSchedulingEnv(gym.Env):
         self.bandwidth = simParams['B']
         self.alpha_range = simParams['alpha_range']
         self.discrete_alpha_steps = simParams['discrete_alpha_steps']
+        self.obvMode = "perfect"
         self.max_episode_steps = max_episode_steps
                 
         # Episode tracking
@@ -121,21 +102,27 @@ class DRLResourceSchedulingEnv(gym.Env):
         
         return w, r, M, alpha
     
+    def observe(self):
+        # Get next observation 
+        # normalized to [0, 1]
+        self.u, self.u_predicted = self.simEnv.getStates()
+        if self.obvMode == "perfect":
+            obs = (self.u / self.len_window).astype(np.float32)
+        elif self.obvMode == "predicted":
+            obs = (self.u_predicted / self.len_window).astype(np.float32)
+        else:
+            raise ValueError(f"Invalid observation mode: {self.obvMode}")
+        return obs
+    
     def step(self, action) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute one step in the environment with realistic temporal constraints."""
         # ================== Update the Simulation Environment ==================
-        # First update the states, since the action is applied to the next traffic, not what agent observed
-        self.simEnv.updateStates()
+        obs = self.observe()
         # Convert action to policy parameters based on CURRENT state
         w, r, M, alpha = self._from_dl_action_to_env_action(action)
-
-        # Apply action to environment using the CURRENT traffic state
-        # (The action is applied to the actual current traffic, not what agent observed)
+        # Apply action to environment
         reward = self.simEnv.applyActions(w, r, M, alpha)
-
-        # Get next observation (will use the previous_user_states we just stored)
-        # normalized to [0, 1]
-        obs = (self.simEnv.getStates() / self.len_window).astype(np.float32)
+        self.simEnv.updateStates()
         #==========================================================================
         # Track episode data
         self.episode_rewards.append(reward)
@@ -157,15 +144,16 @@ class DRLResourceSchedulingEnv(gym.Env):
             'total_resource_allocation': np.sum(r),
             'episode_length': self.current_step,
             'total_packet_loss_rate': self.simEnv.getPacketLossRate(),
-            'observed_previous_states': self.previous_user_states.copy() if self.previous_user_states is not None else None,
-            'actual_current_states': self.simEnv.getStates().copy()
+            'actual_current_states': self.u.copy(),
+            'predicted_current_states': self.u_predicted.copy()
         }
-        return obs, -reward, terminated, truncated, info
+        return obs,-reward, terminated, truncated, info
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset the environment for a new episode."""
         # Reset the Simulation Environment 
         self.simEnv.reset()
+        self.simEnv.updateStates()
         # Reset episode tracking
         self.current_step = 0
         self.episode_rewards = []
@@ -173,7 +161,13 @@ class DRLResourceSchedulingEnv(gym.Env):
         # Reset temporal state tracking
         self.previous_user_states = None
         # Get initial observation
-        obs = (self.simEnv.getStates() / self.len_window).astype(np.float32)
+        self.u, self.u_predicted = self.simEnv.getStates()
+        if self.obvMode == "perfect":
+            obs = (self.u / self.len_window).astype(np.float32)
+        elif self.obvMode == "predicted":
+            obs = (self.u_predicted / self.len_window).astype(np.float32)
+        else:
+            raise ValueError(f"Invalid observation mode: {self.obvMode}")
         info = {
             'episode': 0,
             'total_packet_loss_rate': 0.0,

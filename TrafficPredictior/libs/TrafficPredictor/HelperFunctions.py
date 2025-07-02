@@ -21,8 +21,12 @@ def SmoothFilter(df, fc, fs, order):
 def DiscretizedTraffic(data):    
     outputs = []
     for d in data:
-        outputs.append(round(d))
-    return np.array(outputs)
+        # Ensure the value is finite and convert to integer
+        if np.isfinite(d):
+            outputs.append(int(round(float(d))))
+        else:
+            outputs.append(0)  # Default value for invalid data
+    return np.array(outputs, dtype=np.int64)
 
 def FindLastTransmissionIdx(transmission, current_idx):
     while current_idx-1 >= 0:

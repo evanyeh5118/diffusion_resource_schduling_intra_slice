@@ -69,6 +69,12 @@ def trainModelHelper(parameters, model, criterion, optimizer, device, train_load
             targets = targets.permute(1, 0, 2)
 
             traffics_class = traffics_class.view(-1).to(torch.long)
+            
+            # Ensure traffic class values are within valid range
+            if traffics_class.max() >= parameters['len_target']:
+                print(f"Warning: traffic_class max value {traffics_class.max()} >= num_classes {parameters['len_target']}")
+                traffics_class = torch.clamp(traffics_class, 0, parameters['len_target'] - 1)
+            
             last_trans_sources = last_trans_sources.permute(1, 0, 2)
             
             optimizer.zero_grad()

@@ -5,3 +5,4 @@ from .DRL_config import (
     print_algorithm_info
 )
 from .training import train_drl_agent, create_environment, check_env
+from .evaluate import load_and_evaluate

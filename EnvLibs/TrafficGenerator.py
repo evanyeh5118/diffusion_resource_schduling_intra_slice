@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import math
-
+#from EnvLibs.Helpers import optimal_threshold_binning_uniform_arr, compute_stationary_distribution
 
 class TrafficGenerator:
     def __init__(self, params):
@@ -12,50 +12,69 @@ class TrafficGenerator:
         self.N_states = self.LEN_window+1
         #--------------------------------
         self.userStates = None
+        self.userStatePredicted = None
         self.userStatePivots = None
-        self.trafficDataTrain = None
-        self.trafficDataTest = None
-        self.activeTrafficData = None
+        (self.trafficDataTrain_actual, self.trafficDataTest_actual) = (None, None)
+        (self.trafficDataTrain_predicted, self.trafficDataTest_predicted) = (None, None)
+        self.activeTrafficData_actual = None
+        self.activeTrafficData_predicted = None
         self.M_train = None
         self.M_test = None
         self.M_active = None
         self.mode = None
         self.type = None
+        #------------------------------------------
+        self.N_aggregation = params['N_aggregation']
+        self.thresholds = None
+        self.aggregationMap = None
 
     def selectModeAndType(self, mode="train", type="markov"):
         # mode: train, test 
         # type: markov, data
         (self.mode, self.type) = (mode, type)
         if mode == "test":
-            self.activeTrafficData = self.trafficDataTest  
+            self.activeTrafficData_actual = self.trafficDataTest_actual.astype(int)
+            self.activeTrafficData_predicted = self.trafficDataTest_predicted.astype(int)
             self.M_active = self.M_test
         else:
-            self.activeTrafficData = self.trafficDataTrain
+            self.activeTrafficData_actual = self.trafficDataTrain_actual.astype(int)
+            self.activeTrafficData_predicted = self.trafficDataTrain_predicted.astype(int)
             self.M_active = self.M_train
-        self.userStates = np.random.randint(0, self.N_states, (self.N_user, ))
-        self.userStatePivots = np.random.randint(0, len(self.activeTrafficData)-1, (self.N_user, ))
+        self.reset()
+
+    def getUserStates(self):
+        return self.userStates, self.userStatePredicted
 
     def updateTraffic(self):
         if self.type == "markov":
             for i in range(self.N_user):
                 self.userStates[i] = generate_next_state(self.M_active, self.userStates[i]) 
+                self.userStatePredicted[i] = self.userStates[i]
         elif self.type == "data":
             for i in range(self.N_user):
-                self.userStates[i] = self.activeTrafficData[self.userStatePivots[i]]
-                self.userStatePivots[i] = (self.userStatePivots[i] + 1) % len(self.activeTrafficData)
+                self.userStatePivots[i] = (self.userStatePivots[i] + 1) % len(self.activeTrafficData_actual)
+                self.userStates[i] = self.activeTrafficData_actual[self.userStatePivots[i]]
+                self.userStatePredicted[i] = self.activeTrafficData_predicted[self.userStatePivots[i]]
         else:
             raise ValueError(f"Invalid mode or type: {self.mode}, {self.type}")
-        return self.userStates
-
-    def registerDataset(self, trafficData, train_ratio=0.7):
-        if self.trafficDataTrain is None:
-            self.trafficDataTrain = trafficData[0:int(len(trafficData)*train_ratio)].astype(int)
-            self.trafficDataTest = trafficData[int(len(trafficData)*train_ratio):].astype(int)
+ 
+    def registerDataset(self, 
+                        trafficDataTrain_actual, trafficDataTest_actual,
+                        trafficDataTrain_predicted=None, trafficDataTest_predicted=None):
+        if self.trafficDataTrain_actual is None:
+            self.trafficDataTrain_actual = trafficDataTrain_actual.astype(int)
+            self.trafficDataTest_actual = trafficDataTest_actual.astype(int)
         else:
-            self.trafficDataTrain = np.concatenate((self.trafficDataTrain, trafficData[0:int(len(trafficData)*train_ratio)].astype(int)))
-            self.trafficDataTest = np.concatenate((self.trafficDataTest, trafficData[int(len(trafficData)*train_ratio):].astype(int)))
-        self.M_train = compute_markov_transition_matrix(self.trafficDataTrain, self.N_states)
-        self.M_test = compute_markov_transition_matrix(self.trafficDataTest, self.N_states)
+            self.trafficDataTrain_actual = np.concatenate((self.trafficDataTrain_actual, trafficDataTrain_actual.astype(int)))
+            self.trafficDataTest_actual = np.concatenate((self.trafficDataTest_actual, trafficDataTest_actual.astype(int)))
+        if trafficDataTrain_predicted is not None and self.trafficDataTrain_predicted is None:
+            self.trafficDataTrain_predicted = trafficDataTrain_predicted.astype(int)
+            self.trafficDataTest_predicted = trafficDataTest_predicted.astype(int)
+        else:
+            self.trafficDataTrain_predicted = np.concatenate((self.trafficDataTrain_predicted, trafficDataTrain_predicted.astype(int)))
+            self.trafficDataTest_predicted = np.concatenate((self.trafficDataTest_predicted, trafficDataTest_predicted.astype(int)))
+        self.M_train = compute_markov_transition_matrix(self.trafficDataTrain_actual, self.N_states)
+        self.M_test = compute_markov_transition_matrix(self.trafficDataTest_actual, self.N_states)
         self.selectModeAndType(mode="train", type="data")
 
     def getM(self, mode="train"):
@@ -67,8 +86,9 @@ class TrafficGenerator:
             raise ValueError(f"Invalid mode: {mode}")
         
     def reset(self):
-        self.userStates = np.random.randint(0, self.N_states, (self.N_user, ))
-        self.userStatePivots = np.random.randint(0, len(self.activeTrafficData)-1, (self.N_user, ))
+        self.userStates = np.zeros((self.N_user, ))
+        self.userStatePredicted = np.zeros((self.N_user, ))
+        self.userStatePivots = np.random.randint(0, len(self.activeTrafficData_actual)-1, (self.N_user, ))
 
 def generate_random_transition_matrix(N, alpha=None, random_state=None):
     if random_state is not None:

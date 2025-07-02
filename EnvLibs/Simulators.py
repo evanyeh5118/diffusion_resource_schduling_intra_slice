@@ -141,8 +141,8 @@ def random_select_without_repetition(N, L, seed=None):
     
     if seed is not None:
         np.random.seed(seed)
-    
-    all_numbers = np.arange(L)
-    selected = np.random.choice(all_numbers, size=N, replace=False)
+    (N,L) = (int(N), int(L))
+    all_numbers = np.arange(L).astype(int)
+    selected = np.random.choice(all_numbers, size=N, replace=False).astype(int)
     
     return selected
