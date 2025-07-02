@@ -25,7 +25,7 @@ class PolicySimulator:
         self.env.reset()
         self.env.selectMode(mode=mode, type=type)
         rewardRecord = []   
-        alphaRecord = []
+        actionsRecord = []
         for epoch in range(num_epochs):
             self.env.updateStates()
             u, u_predicted = self.env.getStates()
@@ -37,9 +37,9 @@ class PolicySimulator:
                 raise ValueError(f"Invalid observation mode: {obvMode}")
             reward = self.env.applyActions(np.array(w), np.array(r), M, alpha)
             rewardRecord.append(reward)
-            alphaRecord.append(alpha)
+            actionsRecord.append((w, r, M, alpha))
 
-        return rewardRecord
+        return rewardRecord, actionsRecord
 
 class PolicyDemoAdaptiveAlpha:
     def __init__(self, params):

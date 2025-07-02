@@ -39,9 +39,6 @@ class DRLResourceSchedulingEnv(gym.Env):
         self.episode_rewards = []
         self.episode_alpha_values = []
         
-        # NEW: Track previous state for realistic observations
-        self.previous_user_states = None
-        
         # Define action space based on mode
         self._setup_action_space()
         

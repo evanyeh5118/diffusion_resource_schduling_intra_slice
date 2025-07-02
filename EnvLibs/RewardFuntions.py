@@ -20,7 +20,7 @@ class RewardKernel:
         N_type2 = np.sum(1-w)
         r = N_type1 / (N_type1 + N_type2)
         self.J = r*self.Jtype1 + (1-r)*self.Jtype2
-        #self.J = (N_type1*self.Jtype1 + N_type2*self.Jtype2)
+
         return self.J + self.Jc
 
 class Type1RewardKernel:
