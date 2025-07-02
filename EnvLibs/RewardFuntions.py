@@ -3,8 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import math
 
-from .WirelessModel import successfulPacketCDF
-
+from .WirelessModel import WirelessModel
 
 class RewardKernel:
     def __init__(self, params):
@@ -27,9 +26,10 @@ class RewardKernel:
 class Type1RewardKernel:
     def __init__(self, params):
         self.B = params['B']
+        self.wirelessModel = WirelessModel(params)
 
     def getReward(self, u, w, r):
-      J = 1-np.sum(w * u * successfulPacketCDF(r))  / (np.sum(w*u)+1e-10)
+      J = 1-np.sum(w * u * self.wirelessModel.successfulPacketCDF(r))  / (np.sum(w*u)+1e-10)
       return J
     
 class Type1Constraint:
@@ -46,7 +46,8 @@ class Type2RewardKernel:
         self.LEN_window = params['LEN_window']
         self.r_bar = params['r_bar']
         self.B = params['B']
-        self.epsilon = 1-successfulPacketCDF(self.r_bar)
+        self.wirelessModel = WirelessModel(params)
+        self.epsilon = 1-self.wirelessModel.successfulPacketCDF(self.r_bar)
 
     def getReward(self, u, w, M, alpha):
         N = np.sum(1-w)

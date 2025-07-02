@@ -60,7 +60,7 @@ class PolicyDemoAdaptiveAlpha:
         return w, r, self.M, alpha
     
     def typeAllocator(self, u, lEN_window):
-        w = (u>int(lEN_window*0.5)).astype(int)
+        w = (u>int(lEN_window*0.1)).astype(int)
         return w
     
     def getDependentAction(self, u, w, alpha, B):

@@ -44,12 +44,14 @@ class TrainingCallback(BaseCallback):
         return True
     
 
-def create_environment(simParams, simEnv):
+def create_environment(simParams, simEnv, obvMode="perfect", num_episodes=5000):
     """Create and return the resource scheduling environment."""
      
     env = DRLResourceSchedulingEnv(
         simParams,
-        simEnv
+        simEnv,
+        obvMode,
+        num_episodes
     )
     return Monitor(env)
 
@@ -58,7 +60,7 @@ def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentN
     """Train a DRL agent using the specified algorithm."""    
     underlying_env = env.unwrapped if hasattr(env, 'unwrapped') else env
     print(f"\n{'='*60}")
-    print(f"Training {algorithm_name} Agent")
+    print(f"Training {algorithm_name} as {agentName} Agent")
     print(f"{'='*60}")
     print(f"Total timesteps: {total_timesteps}")
     print(f"Environment: {underlying_env.n_users} users, {underlying_env.bandwidth} bandwidth")

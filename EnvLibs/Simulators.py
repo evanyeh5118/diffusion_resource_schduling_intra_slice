@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import math, random
 
 from EnvLibs import TrafficGenerator
-from EnvLibs import successfulPacketCDF
+from EnvLibs import WirelessModel
 
 
 class SimulatorType1:
@@ -14,6 +14,7 @@ class SimulatorType1:
         self.LEN_window = params['LEN_window']
         self.successTotal = 0
         self.activeTotal = 0
+        self.wirelessModel = WirelessModel(params)
 
     def stepSimple(self, u, w, r):
         # Filter active users (w==1) and get their corresponding traffic and rates
@@ -22,7 +23,7 @@ class SimulatorType1:
         rb = r[active_mask]
         for i, traffic in enumerate(traffics):
             for _ in range(traffic):
-                if random.random() <= successfulPacketCDF(rb[i]):
+                if random.random() <=  self.wirelessModel.successfulPacketCDF(rb[i]):
                     self.successTotal += 1
             self.activeTotal += traffic
 
@@ -42,7 +43,7 @@ class SimulatorType1:
             if not active_idx:
                 continue
             for i in active_idx:
-                if B_type1 > 0 and random.random() < successfulPacketCDF(min(rb[i], B_type1)):
+                if B_type1 > 0 and random.random() < self.wirelessModel.successfulPacketCDF(min(rb[i], B_type1)):
                     successWindow += 1
                     B_type1 -= rb[i]
         
@@ -63,9 +64,9 @@ class SimulatorType2:
     def __init__(self, params):
         self.B = params['B']
         self.r_bar = params['r_bar']
-        self.epsilon = 1-successfulPacketCDF(params['r_bar'])
+        self.wirelessModel = WirelessModel(params)
+        self.epsilon = 1-self.wirelessModel.successfulPacketCDF(self.r_bar)
         self.LEN_window = params['LEN_window']
-
         self.failuresTotal = 0
         self.activeTotal = 0
 

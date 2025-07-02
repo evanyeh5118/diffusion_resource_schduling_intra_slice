@@ -18,7 +18,8 @@ class DRLResourceSchedulingEnv(gym.Env):
         self,
         simParams,
         simEnv,
-        max_episode_steps: int = 1000,
+        obvMode="perfect",
+        max_episode_steps: int = 5000,
     ):
         super().__init__()
         
@@ -30,7 +31,7 @@ class DRLResourceSchedulingEnv(gym.Env):
         self.bandwidth = simParams['B']
         self.alpha_range = simParams['alpha_range']
         self.discrete_alpha_steps = simParams['discrete_alpha_steps']
-        self.obvMode = "perfect"
+        self.obvMode = obvMode
         self.max_episode_steps = max_episode_steps
                 
         # Episode tracking
@@ -147,7 +148,7 @@ class DRLResourceSchedulingEnv(gym.Env):
             'actual_current_states': self.u.copy(),
             'predicted_current_states': self.u_predicted.copy()
         }
-        return obs,-reward, terminated, truncated, info
+        return obs, -reward, terminated, truncated, info
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset the environment for a new episode."""
@@ -158,16 +159,8 @@ class DRLResourceSchedulingEnv(gym.Env):
         self.current_step = 0
         self.episode_rewards = []
         self.episode_alpha_values = []
-        # Reset temporal state tracking
-        self.previous_user_states = None
         # Get initial observation
-        self.u, self.u_predicted = self.simEnv.getStates()
-        if self.obvMode == "perfect":
-            obs = (self.u / self.len_window).astype(np.float32)
-        elif self.obvMode == "predicted":
-            obs = (self.u_predicted / self.len_window).astype(np.float32)
-        else:
-            raise ValueError(f"Invalid observation mode: {self.obvMode}")
+        obs = self.observe()
         info = {
             'episode': 0,
             'total_packet_loss_rate': 0.0,
