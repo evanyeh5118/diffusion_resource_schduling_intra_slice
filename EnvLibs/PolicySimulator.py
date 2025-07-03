@@ -11,6 +11,7 @@ class PolicySimulator:
         self.env.selectMode(mode=mode, type=type)
         rewardRecord = []   
         actionsRecord = []
+        uRecord = []
         for epoch in range(num_epochs):
             self.env.updateStates()
             u, u_predicted = self.env.getStates()
@@ -23,9 +24,15 @@ class PolicySimulator:
             reward = self.env.applyActions(np.array(w), np.array(r), M, alpha)
             rewardRecord.append(reward)
             actionsRecord.append((w, r, M, alpha))
+            uRecord.append(u)
 
-        return rewardRecord, actionsRecord
-
+        simResult = {
+            "rewardRecord": rewardRecord,
+            "actionsRecord": actionsRecord,
+            "uRecord": uRecord
+        }
+        return simResult
+    
 class PolicyDemoAdaptiveAlpha:
     def __init__(self, params):
         self.params = params
