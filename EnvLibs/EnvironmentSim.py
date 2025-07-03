@@ -1,10 +1,20 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import math, random
+import pickle
 
+from .EnvConfigs import getEnvConfig
 from .Simulators import SimulatorType1, SimulatorType2
 from .TrafficGenerator import TrafficGenerator
+
+def createEnv(envParams, trafficDataParentPath):    
+    with open(f'{trafficDataParentPath}/trafficData_{envParams["dataflow"]}_LenWindow{envParams["LEN_window"]}.pkl', 'rb') as f:
+        trafficData = pickle.load(f)
+    trafficGenerator = TrafficGenerator(envParams)
+    trafficGenerator.registerDataset(
+        trafficData['trafficSource_train_actual'], trafficData['trafficSource_test_actual'],
+        trafficData['trafficTarget_train_predicted'], trafficData['trafficTarget_test_predicted']
+    )
+    simEnv = Environment(envParams, trafficGenerator)
+    simEnv.selectMode(mode="train", type="data")
+    return simEnv
 
 
 class Environment:
