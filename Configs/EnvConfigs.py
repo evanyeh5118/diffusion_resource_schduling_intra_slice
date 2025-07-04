@@ -27,6 +27,19 @@ def getEnvConfig(configIdx):
             'discrete_alpha_steps': 10,
             'N_aggregation': 4,
         }
+    elif configIdx == 2:
+        return {
+            'N_user': 2,
+            'LEN_window': 200,
+            'dataflow': 'thumb_bk',
+            'r_bar': 5,
+            'B': 100,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 2,
+            'N_aggregation': 2,
+        }
     else:
         raise ValueError(f"Invalid configIdx: {configIdx}")
 

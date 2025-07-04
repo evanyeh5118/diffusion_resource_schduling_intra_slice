@@ -29,6 +29,20 @@ def getPredictorConfig(configIdx):
             'smoothFc': 1.5,
             'smoothOrder': 3,
         }
+    elif configIdx == 2:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_bk",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "backward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
     else:
         raise ValueError(f"Invalid configIdx: {configIdx}")
 

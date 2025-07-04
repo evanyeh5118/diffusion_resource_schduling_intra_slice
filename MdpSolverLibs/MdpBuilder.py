@@ -105,7 +105,7 @@ class MdpFormulator:
         params['transitionTable'] = transitionTable
         params['rewardTable'] = rewardTable
         params['actionTable'] = actionTable
-        return MdpKernel(params)
+        return MdpKernel(params), params
         
     def from_origin_to_aggregated_state(self, sOrigin):
         uOrigin = index_to_tuple(sOrigin, self.LEN_window+1, self.N_user)
