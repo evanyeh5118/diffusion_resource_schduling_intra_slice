@@ -35,7 +35,7 @@ def timestep_embedding(t: torch.Tensor, dim: int, *, max_period: int = 10_000) -
     return F.pad(emb, (0, dim % 2))  # zero-pad if odd
 
 
-def mlp(inp: int, out: int, hidden: Sequence[int] = (256, 256, 256), act=nn.Mish):
+def mlp(inp: int, out: int, hidden: Sequence[int] = (16, 16, 16), act=nn.Mish):
     mods: list[nn.Module] = []
     prev = inp
     for h in hidden:
