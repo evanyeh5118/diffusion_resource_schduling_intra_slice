@@ -69,20 +69,6 @@ class MdpKernel:
         return r
 
     def optimize_policy(self, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
-        """Compute an *optimal* deterministic policy that **minimises** the
-        expected discounted sum of rewards (i.e. treats rewards as *costs*).
-
-        This solves the Bellman *optimality* equation for **minimisation**:
-
-            V*(s) = min_a [ R(s,a) + γ Σ_{s'} P(s'|s,a) V*(s') ].
-
-        Notes
-        -----
-        If your rewards already represent costs (e.g. non‑negative numbers in
-        ``[0, 1]`` you wish to drive to *zero*), then this method directly
-        optimises for the smallest cumulative cost.  It is equivalent to
-        calling :py:meth:`optimize_policy` on the *negated* reward function.
-        """
         self.V = np.zeros(self.N_states)  # cost‑to‑go initialisation
 
         for _ in range(max_iterations):

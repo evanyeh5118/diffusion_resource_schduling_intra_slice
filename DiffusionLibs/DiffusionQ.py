@@ -15,11 +15,11 @@ class DiffusionQLearner(nn.Module):
         state_dim: int,
         action_dim: int,
         gamma: float = 0.99,
-        tau: float = 0.001,
-        lr: float = 3e-3,
+        tau: float = 0.1,
+        lr: float = 5e-2,
         eta: float = 1e-6,
-        dropout_p: float = 0.2,
-        device: torch.device = "cpu",
+        dropout_p: float = 0.1,
+        device: torch.device = "cuda",
     ):
         super().__init__()
         self.device = torch.device(device)
@@ -88,9 +88,9 @@ class DiffusionQLearner(nn.Module):
         # ==================================================
         # ==== Dropout a_est with probability dropout_p ====
         if torch.rand(1).item() < self.dropout_p:
-            a_est = self.diffusion_policy.sample(s)
-        else:
             a_est = a
+        else:
+            a_est = self.diffusion_policy_target.target.sample(s)
         
         q = self.q1(s, a_est)
         with torch.no_grad():
@@ -102,7 +102,7 @@ class DiffusionQLearner(nn.Module):
         loss.backward()
         self.optimizer_policy.step()
 
-        return Ld.detach(), Lq.detach()
+        return Ld.cpu().detach().numpy(), Lq.cpu().detach().numpy()
         
         
     def update(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:

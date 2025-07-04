@@ -6,14 +6,14 @@ class PolicySimulator:
         self.policy = policy
         self.env = env
     
-    def runSimulation(self, policy, obvMode="perfect", num_epochs=1000, mode="test", type="data"):
+    def runSimulation(self, policy, num_windows=1000, obvMode="perfect", mode="test", type="data"):
         self.env.reset()
         self.env.selectMode(mode=mode, type=type)
         rewardRecord = []   
         actionsRecord = []
         uRecord = []
-        for epoch in range(num_epochs):
-            self.env.updateStates()
+        uNextRecord = []
+        for window in range(num_windows):
             u, u_predicted = self.env.getStates()
             if obvMode == "perfect":
                 (w, r, M, alpha) = policy.predict(u)
@@ -22,14 +22,23 @@ class PolicySimulator:
             else:
                 raise ValueError(f"Invalid observation mode: {obvMode}")
             reward = self.env.applyActions(np.array(w), np.array(r), M, alpha)
+            self.env.updateStates()
+            u_next, u_next_predicted = self.env.getStates()
+            #============ Record Results ============
             rewardRecord.append(reward)
-            actionsRecord.append((w, r, M, alpha))
-            uRecord.append(u)
+            actionsRecord.append((np.array(w), np.array(r), M, alpha))
+            if obvMode == "perfect":
+                uRecord.append(u)
+                uNextRecord.append(u_next)
+            elif obvMode == "predicted":
+                uRecord.append(u_predicted)
+                uNextRecord.append(u_next_predicted)
 
         simResult = {
             "rewardRecord": rewardRecord,
             "actionsRecord": actionsRecord,
-            "uRecord": uRecord
+            "uRecord": uRecord,
+            "uNextRecord": uNextRecord
         }
         return simResult
     

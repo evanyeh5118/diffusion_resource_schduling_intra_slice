@@ -58,4 +58,5 @@ class Environment:
         self.simulatorType1.reset()
         self.simulatorType2.reset()
         self.trafficGenerator.reset()
+        self.updateStates()
 
