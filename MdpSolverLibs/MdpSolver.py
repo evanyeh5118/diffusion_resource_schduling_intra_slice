@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 from .MdpBuilderHelpers import *
 
 class MdpKernel:
@@ -46,8 +47,9 @@ class MdpKernel:
     # ------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------
-    def load_policy(self, mdpParams):
+    def load_policy(self, mdpParams, policyMode='deterministic'):
         self.set_params(mdpParams)
+        self.mode = policyMode
         self.V = mdpParams['V']
         self.policy = mdpParams['policy']
 
@@ -56,17 +58,19 @@ class MdpKernel:
         sAggregated = self._from_origin_to_aggregated_state(sOrigin)
         return self._getAction(sAggregated)
 
-    def optimize_policy(self, mode: str = "deterministic", gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
+    def optimize_policy(self, mode: str = "deterministic", gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 20, lr=1e-2, temperature=1.0):
+        self.mode = mode
         if mode == "deterministic":
             return self._optimize_policy_deterministic(gamma, theta, max_iterations)
         elif mode == "stochastic":
-            return self._optimize_policy_stochastic(temperature=1.0, gamma=gamma, theta=theta, max_iterations=max_iterations)
+            return self._optimize_policy_stochastic(
+            gamma=gamma, theta=theta, max_iterations=max_iterations, temperature=temperature, lr=lr)
         else:
             raise ValueError(f"Invalid mode: {mode}")
     
-    def _optimize_policy_stochastic(self, temperature: float = 1.0, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
-        self.policy, self.V = self._policy_iteration(temperature=temperature, gamma=gamma, theta=theta, max_iterations=max_iterations)
-        return self.policy, self.V
+    def _optimize_policy_stochastic(self, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 20, temperature=1.0, lr=1e-2):
+        self.policy, self.V = self._optimize_policy_gradient(temperature=temperature, gamma=gamma, theta=theta, max_iterations=max_iterations, lr=lr)
+        return self.V, self.policy
 
     def _optimize_policy_deterministic(self, 
                                       gamma: float = 0.99, 
@@ -103,7 +107,12 @@ class MdpKernel:
 
     def _getAction(self, sAggregated):
         #--------------compute action--------------
-        a = self.policy[sAggregated]
+        if self.mode == "deterministic":
+            a = self.policy[sAggregated]
+        elif self.mode == "stochastic":
+            a = np.random.choice(self.N_actions, p=self.policy[sAggregated])
+        else:
+            raise ValueError(f"Invalid mode: {self.mode}")
         (w, alpha, M) = self.actionTable[a]
         uAggregated = index_to_tuple(sAggregated, self.N_aggregation, self.N_user)
         r = self._getDependentAction(np.array(uAggregated), np.array(w), alpha, self.B)
@@ -126,77 +135,109 @@ class MdpKernel:
    # ==== Stochastic solution ========================
    # ====================================================
 
-    def _evaluate_policy_exact(self, policy):
+
+    # ---------- Exact policy evaluation ----------
+    def _evaluate_policy_exact(self, policy, gamma: float = 0.99):
         """
-        policy: numpy array of shape (N_states, N_actions)
-                policy[s, a] gives π(a|s)
-        Returns: v, numpy array of shape (N_states,)
+        Vectorised policy evaluation with built-in NaN protection.
         """
+        # ---------- Numerically-stable soft-max ----------
+        _EPS          = 1e-12          # small constant to avoid /0
+        _MAX_EXP_ARG  = 700.0          # ~ np.log(np.finfo(float).max)   
         S, A = self.N_states, self.N_actions
 
-        # Build reward vector r_pi
-        r_pi = np.zeros(S)
+        # 1.  Ensure policy is well-formed (no NaN / rows sum to 1)
+        policy = np.nan_to_num(policy, nan=1.0 / A, posinf=1.0 / A, neginf=1.0 / A)
+        row_sums = policy.sum(axis=1, keepdims=True)
+        policy  /= np.maximum(row_sums, _EPS)               # renormalise in place
+
+        # 2.  Reward vector r_π
+        r_pi = np.zeros(S, dtype=np.float64)
         for s in range(S):
             for a in range(A):
-                prob = policy[s, a]
-                if prob:
-                    r_pi[s] += prob * self._getReward(s, a)
+                p_sa = policy[s, a]
+                if p_sa > 0.0:
+                    r = 1.0-np.clip(self._getReward(s, a), 0, 1.0)
+                    r_pi[s] += p_sa * r
 
-        # Build transition matrix P_pi
-        P_pi = np.zeros((S, S))
-        for s in range(S):
-            for a in range(A):
-                prob = policy[s, a]
-                if prob:
-                    for s_next, p in self._getTransition(a)[s].items():
-                        P_pi[s, s_next] += prob * p
+        # 3.  Transition matrix P_π
+        P_pi = np.zeros((S, S), dtype=np.float64)
+        for a in range(A):
+            T_a = self._getTransition(a)                    # shape (S, S)
+            P_pi += (policy[:, a, None] * T_a)
 
-        # Solve (I - gamma * P_pi) v = r_pi
-        A_mat = np.eye(S) - self.gamma * P_pi
-        v = np.linalg.solve(A_mat, r_pi)
+        # 4.  Solve (I − γ P_π) v = r_π
+        A_mat = np.eye(S) - gamma * P_pi
+        try:
+            v = np.linalg.solve(A_mat, r_pi)
+        except np.linalg.LinAlgError:                       # singular → least-squares
+            v, *_ = np.linalg.lstsq(A_mat, r_pi, rcond=None)
+
         return v
 
-    def _policy_iteration(self, temperature=1.0, gamma=0.99, theta=1e-6, max_iterations=1000):
-        """
-        Soft (stochastic) policy iteration with array-based policy.
 
-        Returns:
-          policy: numpy array (N_states, N_actions)
-          value_function: numpy array (N_states,)
+    # ---------- Soft policy-iteration ----------
+    def _optimize_policy_gradient(self,
+                                  lr: float = 1e-1,
+                                  gamma: float = 0.99,
+                                  temperature: float = 1.0,
+                                  max_iterations: int = 20,
+                                  theta: float = 1e-10):
+        """
+        Gradient-based policy optimization using model-based Bellman gradients.
         """
         S, A = self.N_states, self.N_actions
+        policy = np.full((S, A), 1.0 / A, dtype=np.float64)   # initial stochastic policy
 
-        policy = np.ones((S, A)) / A
+        with tqdm(range(max_iterations), desc="Policy Optimization") as ite_bar:
+            for _ in ite_bar:
+                # 1. Evaluate current policy
+                v = self._evaluate_policy_exact(policy, gamma=gamma)
+                ite_bar.set_postfix({
+                    'V': f'{v.mean():.6f}'
+                })
 
-        for it in range(max_iterations):
-            # Policy evaluation
-            v = self._evaluate_policy_exact(policy)
-
-            # Policy improvement (softmax)
-            new_policy = np.zeros_like(policy)
-            # Compute Q-table
-            Q = np.zeros((S, A))
-            for s in range(S):
+                # 2. Compute Q-values under current V
+                Q = np.empty_like(policy)
                 for a in range(A):
-                    r_sa = self._getReward(s, a)
-                    expected_v = sum(
-                        p * v[s_next]
-                        for s_next, p in self._getTransition(a)[s].items()
-                    )
-                    Q[s, a] = r_sa + gamma * expected_v
+                    r_sa = np.vectorize(self._getReward)(np.arange(S), np.full(S, a))
+                    r_sa = 1.0 - np.clip(r_sa, 0, 1.0)
+                    T_a = self._getTransition(a)
+                    Q[:, a] = r_sa + gamma * (T_a @ v)
 
-            # Softmax update per state
-            max_diff = 0.0
-            for s in range(S):
-                q = Q[s]
-                q_max = q.max()
-                exp_q = np.exp((q - q_max) / temperature)
-                probs = exp_q / exp_q.sum()
-                max_diff = max(max_diff, np.max(np.abs(policy[s] - probs)))
-                new_policy[s] = probs
+                # 3. Policy gradient step (softmax-compatible)
+                logits = np.log(policy + 1e-12) + lr * Q / temperature  # add scaled Q to logits
+                new_policy = np.apply_along_axis(self.softmax, 1, logits, temperature)
 
-            policy = new_policy
-            if max_diff < theta:
-                break
+                # 4. NaN protection
+                nan_rows = np.isnan(new_policy).any(axis=1)
+                if nan_rows.any():
+                    new_policy[nan_rows] = 1.0 / A
+
+                # 5. Convergence check
+                max_diff = np.abs(policy - new_policy).max()
+                policy = new_policy
+                if max_diff < theta:
+                    break
 
         return policy, v
+
+    def softmax(self, x, temperature: float = 1.0):
+        # ---------- Numerically-stable soft-max ----------
+        _EPS          = 1e-12          # small constant to avoid /0
+        _MAX_EXP_ARG  = 700.0          # ~ np.log(np.finfo(float).max)   
+        
+        if temperature <= 0:
+            raise ValueError("temperature must be strictly positive")
+
+        # Log-sum-exp trick
+        z = (x - np.nanmax(x)) / temperature        # shift for stability
+        z = np.clip(z, -_MAX_EXP_ARG, 0.0)          # exp() domain safety
+        exp_z = np.exp(z)
+        denom = exp_z.sum()
+
+        # If everything under-flowed, fall back to uniform
+        if denom < _EPS or np.isnan(denom):
+            return np.full_like(x, 1.0 / len(x), dtype=np.float64)
+
+        return exp_z / (denom + _EPS)

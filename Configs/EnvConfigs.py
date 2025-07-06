@@ -29,7 +29,7 @@ def getEnvConfig(configIdx):
         }
     elif configIdx == 2:
         return {
-            'N_user': 2,
+            'N_user': 3,
             'LEN_window': 200,
             'dataflow': 'thumb_bk',
             'r_bar': 5,
