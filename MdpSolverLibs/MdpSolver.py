@@ -24,8 +24,11 @@ class MdpKernel:
     # Construction helpers
     # ------------------------------------------------------------
     def __init__(self, params=None):
+        # if params is None, then it is in load mode
         if params is not None:
-            self.set_params(params)
+            self.set_params(params)       
+            self.rewardTable = params['rewardTable']
+            self.transitionTable = params['transitionTable']     
         self.policy = None
         self.V = None
 
@@ -38,10 +41,8 @@ class MdpKernel:
         self.N_states = params['N_states']
         self.N_actions = params['N_actions']
         self.aggregationMap = params['aggregationMap']
-        self.rewardTable = params['rewardTable']
-        self.transitionTable = params['transitionTable']
-        self.actionTable = params['actionTable']
-        
+        self.actionTable = params['actionTable'] 
+
     # ------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------
@@ -55,9 +56,17 @@ class MdpKernel:
         sAggregated = self._from_origin_to_aggregated_state(sOrigin)
         return self._getAction(sAggregated)
 
-    def optimize_policy(self, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
-        return self._optimize_policy_deterministic(gamma, theta, max_iterations)
+    def optimize_policy(self, mode: str = "deterministic", gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
+        if mode == "deterministic":
+            return self._optimize_policy_deterministic(gamma, theta, max_iterations)
+        elif mode == "stochastic":
+            return self._optimize_policy_stochastic(temperature=1.0, gamma=gamma, theta=theta, max_iterations=max_iterations)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
     
+    def _optimize_policy_stochastic(self, temperature: float = 1.0, gamma: float = 0.99, theta: float = 1e-6, max_iterations: int = 1_000):
+        self.policy, self.V = self._policy_iteration(temperature=temperature, gamma=gamma, theta=theta, max_iterations=max_iterations)
+        return self.policy, self.V
 
     def _optimize_policy_deterministic(self, 
                                       gamma: float = 0.99, 
@@ -111,61 +120,83 @@ class MdpKernel:
     def _getTransition(self, a: int):
         """Return state‑transition matrix ``P_a`` for action *a*."""
         return self.transitionTable[:, :, a]
+    
 
-    '''
-    def optimize_stochastic_policy(self,
-                                   gamma: float = 0.99,
-                                   theta: float = 1e-6,
-                                   max_iterations: int = 1_000,
-                                   ):
-        # 1) Initialize to a uniform random policy
-        # policy[s,a] = probability of taking a in s
-        self.policy = np.ones((self.N_states, self.N_actions)) / self.N_actions
-        # 2) Zero initial value function
-        self.V = np.zeros(self.N_states)
+   #=====================================================
+   # ==== Stochastic solution ========================
+   # ====================================================
 
-        for _ in range(max_iterations):
-            # ----- Policy Evaluation -----
-            while True:
-                delta = 0.0
-                for s in range(self.N_states):
-                    v_old = self.V[s]
-                    # V[s] = sum_a pi[s,a] * [ R(s,a) + γ Σ_s' P(s'|s,a) V[s'] ]
-                    self.V[s] = sum(
-                        self.policy[s, a] *
-                        (self.getReward(s, a) +
-                        gamma * np.dot(self.getTransition(a)[s], self.V))
-                        for a in range(self.N_actions)
+    def _evaluate_policy_exact(self, policy):
+        """
+        policy: numpy array of shape (N_states, N_actions)
+                policy[s, a] gives π(a|s)
+        Returns: v, numpy array of shape (N_states,)
+        """
+        S, A = self.N_states, self.N_actions
+
+        # Build reward vector r_pi
+        r_pi = np.zeros(S)
+        for s in range(S):
+            for a in range(A):
+                prob = policy[s, a]
+                if prob:
+                    r_pi[s] += prob * self._getReward(s, a)
+
+        # Build transition matrix P_pi
+        P_pi = np.zeros((S, S))
+        for s in range(S):
+            for a in range(A):
+                prob = policy[s, a]
+                if prob:
+                    for s_next, p in self._getTransition(a)[s].items():
+                        P_pi[s, s_next] += prob * p
+
+        # Solve (I - gamma * P_pi) v = r_pi
+        A_mat = np.eye(S) - self.gamma * P_pi
+        v = np.linalg.solve(A_mat, r_pi)
+        return v
+
+    def _policy_iteration(self, temperature=1.0, gamma=0.99, theta=1e-6, max_iterations=1000):
+        """
+        Soft (stochastic) policy iteration with array-based policy.
+
+        Returns:
+          policy: numpy array (N_states, N_actions)
+          value_function: numpy array (N_states,)
+        """
+        S, A = self.N_states, self.N_actions
+
+        policy = np.ones((S, A)) / A
+
+        for it in range(max_iterations):
+            # Policy evaluation
+            v = self._evaluate_policy_exact(policy)
+
+            # Policy improvement (softmax)
+            new_policy = np.zeros_like(policy)
+            # Compute Q-table
+            Q = np.zeros((S, A))
+            for s in range(S):
+                for a in range(A):
+                    r_sa = self._getReward(s, a)
+                    expected_v = sum(
+                        p * v[s_next]
+                        for s_next, p in self._getTransition(a)[s].items()
                     )
-                    delta = max(delta, abs(v_old - self.V[s]))
-                if delta < theta:
-                    break
+                    Q[s, a] = r_sa + gamma * expected_v
 
-            # ----- Policy Improvement -----
-            policy_stable = True
-            for s in range(self.N_states):
-                old_action_probs = self.policy[s].copy()
-                # compute Q(s,a) for all a
-                q = np.array([
-                    self.getReward(s, a) +
-                    gamma * np.dot(self.getTransition(a)[s], self.V)
-                    for a in range(self.N_actions)
-                ])
-                # find the minimal cost
-                best = q.min()
-                # all actions achieving that cost
-                best_actions = np.where(q == best)[0]
-                # new policy: uniform over best actions
-                new_probs = np.zeros_like(old_action_probs)
-                new_probs[best_actions] = 1.0 / len(best_actions)
-                self.policy[s] = new_probs
+            # Softmax update per state
+            max_diff = 0.0
+            for s in range(S):
+                q = Q[s]
+                q_max = q.max()
+                exp_q = np.exp((q - q_max) / temperature)
+                probs = exp_q / exp_q.sum()
+                max_diff = max(max_diff, np.max(np.abs(policy[s] - probs)))
+                new_policy[s] = probs
 
-                if not np.allclose(old_action_probs, new_probs):
-                    policy_stable = False
-
-            if policy_stable:
+            policy = new_policy
+            if max_diff < theta:
                 break
 
-        return self.V, self.policy
-'''
-
+        return policy, v

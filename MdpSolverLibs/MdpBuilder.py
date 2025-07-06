@@ -92,20 +92,23 @@ class MdpFormulator:
         return r
     
     def getMdpKernel(self):
-        params = self.params.copy()
-        params['N_states'] = self.N_states
-        params['N_actions'] = self.N_actions
-        params['aggregationMap'] = self.aggregationMap
-        params['N_aggregation'] = self.N_aggregation
+        mdpParams = self.params.copy()
+        mdpParams['N_states'] = self.N_states
+        mdpParams['N_actions'] = self.N_actions
+        mdpParams['aggregationMap'] = self.aggregationMap
+        mdpParams['N_aggregation'] = self.N_aggregation
+        #-------------------------------------------------
+        #actionTable = {i: self.actionSpace[i] for i in range(self.N_actions)}
+        actionTable = self.actionSpace
+        mdpParams['actionTable'] = actionTable
         #------------------------------------------------
         transitionTable = np.zeros((self.N_states, self.N_states, self.N_actions))
         for i in range(self.N_actions): transitionTable[:,:,i] = self.M_aggregation
-        actionTable = {i: self.actionSpace[i] for i in range(self.N_actions)}
         rewardTable = self.aggregatedRewardTable
-        params['transitionTable'] = transitionTable
-        params['rewardTable'] = rewardTable
-        params['actionTable'] = actionTable
-        return MdpKernel(params), params
+        kernelParams = mdpParams.copy()
+        kernelParams['transitionTable'] = transitionTable
+        kernelParams['rewardTable'] = rewardTable
+        return MdpKernel(kernelParams), mdpParams
         
     def from_origin_to_aggregated_state(self, sOrigin):
         uOrigin = index_to_tuple(sOrigin, self.LEN_window+1, self.N_user)
