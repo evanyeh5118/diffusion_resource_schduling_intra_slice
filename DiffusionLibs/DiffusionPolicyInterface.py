@@ -118,7 +118,7 @@ class DiffusionPolicyInterface:
         return S
     
     def _preprocess_reward(self, reward):
-        R = -1*np.array(reward)
+        R = 1.0-np.array(reward)
         return R
     
     def sample(self, state: np.ndarray):
@@ -176,7 +176,11 @@ class DiffusionPolicyInterface:
         info = {
             'LdRecord': LdRecord,
             'LqRecord': LqRecord,
-            'lossCriticRecord': lossCriticRecord
+            'lossCriticRecord': lossCriticRecord,
+            'R': R,
+            'S': S,
+            'A': A,
+            'S_next': S_next
         }
         return model_state_dict, info
 

@@ -50,7 +50,7 @@ class DiffusionQLearner(nn.Module):
     def sample(self, s: torch.Tensor) -> torch.Tensor:
         return self.diffusion_policy.sample(s)
 
-    def update_critic(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
+    def _update_critic(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a, r, s_next = batch
         # Move to correct device
         s, a, s_next = s.float().to(self.device), a.float().to(self.device), s_next.float().to(self.device)
@@ -76,7 +76,7 @@ class DiffusionQLearner(nn.Module):
 
         return loss.item()
         
-    def update_policy(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
+    def _update_policy(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a = batch[0], batch[1]
         s, a = s.float().to(self.device), a.float().to(self.device)
         # ==================================================
@@ -94,8 +94,8 @@ class DiffusionQLearner(nn.Module):
         
         q = self.q1(s, a_est)
         with torch.no_grad():
-            scale = torch.mean(torch.abs(self.q1(s, a))) + 1e-6
-        Lq = -self.eta / scale * q.mean()
+            scale = torch.mean(torch.abs(self.q1(s, a)))
+        Lq = -self.eta / (scale + 1e-6) * q.mean()
         loss = Ld + Lq
 
         self.optimizer_policy.zero_grad()
@@ -106,8 +106,8 @@ class DiffusionQLearner(nn.Module):
         
         
     def update(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
-        loss_critic = self.update_critic(batch)
-        Ld, Lq = self.update_policy(batch)
+        loss_critic = self._update_critic(batch)
+        Ld, Lq = self._update_policy(batch)
 
         # Soft-update EMA targets
         self.diffusion_policy_target.soft_update()
@@ -115,3 +115,5 @@ class DiffusionQLearner(nn.Module):
         self.q2_target.soft_update()
 
         return Ld, Lq, loss_critic
+
+    
