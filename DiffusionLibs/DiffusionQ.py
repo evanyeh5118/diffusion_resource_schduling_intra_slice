@@ -37,7 +37,8 @@ class DiffusionQLearner(nn.Module):
 
         # Optimizer for both critics
         self.optimizer_critic = torch.optim.Adam(
-            list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
+            list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr,
+            weight_decay=1e-5
         )
         self.optimizer_policy = torch.optim.Adam(
             list(self.diffusion_policy.parameters()), lr=lr
@@ -50,64 +51,76 @@ class DiffusionQLearner(nn.Module):
     def sample(self, s: torch.Tensor) -> torch.Tensor:
         return self.diffusion_policy.sample(s)
 
+
     def _update_critic(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a, r, s_next = batch
         # Move to correct device
         s, a, s_next = s.float().to(self.device), a.float().to(self.device), s_next.float().to(self.device)
         r = r.float().to(self.device).squeeze(-1)
-
-        a_next = self.diffusion_policy_target.target.sample(s_next)       
-        # Compute target Q-value via EMA networks (clipped double-Q)
+        # Compute target Q-value via EMA networks 
         with torch.no_grad():
+            a_next = self.diffusion_policy_target.target.sample(s_next)     
             q1_next = self.q1_target(s_next, a_next)
             q2_next = self.q2_target(s_next, a_next)
             q_target = r + self.gamma * torch.min(q1_next, q2_next)
-            # ========= clip q_target to [-1, 1] =========
-            q_target = torch.clamp(q_target, min=-10, max=10)
-
          # Current Q estimates
         q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
         loss = F.mse_loss(q1_pred, q_target) +  F.mse_loss(q2_pred, q_target)
-
         # Optimize critics
         self.optimizer_critic.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q1.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.q2.parameters(), 10.0)
         self.optimizer_critic.step()
 
         return loss.item()
         
-    def _update_policy(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
+    def _update_policy(self, 
+                       batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a = batch[0], batch[1]
         s, a = s.float().to(self.device), a.float().to(self.device)
-        # ==================================================
-        # ========= Compute Ld =============================
-        # ==================================================
-        Ld = self.diffusion_policy.diffusion_loss(s, a)
-        # ==================================================
-        # ========= Compute Lq =============================
-        # ==================================================
         # ==== Dropout a_est with probability dropout_p ====
         if torch.rand(1).item() < self.dropout_p:
             a_est = a
         else:
-            a_est = self.diffusion_policy_target.target.sample(s)
-        
+            a_est = self.diffusion_policy.sample(s)
+        # ==================================================
         q = self.q1(s, a_est)
         with torch.no_grad():
-            scale = torch.mean(torch.abs(self.q1(s, a)))
+            scale = torch.mean(self.q1_target(s, a_est))
+        # ==================================================
         Lq = -self.eta / (scale + 1e-6) * q.mean()
+        Ld = self.diffusion_policy.diffusion_loss(s, a)
         loss = Ld + Lq
-
+        # ==================================================
         self.optimizer_policy.zero_grad()
         loss.backward()
         self.optimizer_policy.step()
 
         return Ld.cpu().detach().numpy(), Lq.cpu().detach().numpy()
         
+    def _update_policy_online(self, 
+                              batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
+        s = batch[0].float().to(self.device)
+        a_est = self.diffusion_policy.sample(s)
+        q = self.q1(s, a_est)
+        loss = -self.eta*q.mean()
         
-    def update(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
+        self.optimizer_policy.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 10.0)
+        self.optimizer_policy.step()
+        return loss.item()
+
+    def update(self, 
+               batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+               clonePolicy: bool = True) -> float:
         loss_critic = self._update_critic(batch)
-        Ld, Lq = self._update_policy(batch)
+        if clonePolicy:
+            Ld, Lq = self._update_policy(batch)
+        else:
+            Lq = self._update_policy_online(batch)
+            Ld = 0.0
 
         # Soft-update EMA targets
         self.diffusion_policy_target.soft_update()

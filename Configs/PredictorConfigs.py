@@ -1,5 +1,3 @@
-
-
 def getPredictorConfig(configIdx):
     if configIdx == 0:
         return {
@@ -29,7 +27,91 @@ def getPredictorConfig(configIdx):
             'smoothFc': 1.5,
             'smoothOrder': 3,
         }
-    elif configIdx == 2:
+    elif configIdx == 3:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_fr",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "forward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == 4:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_bk",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "backward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == 5:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_fr",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "forward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == 6:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_bk",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "backward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == 7:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_fr",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "forward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == 8:
+        return {
+            'LEN_window': 200,
+            'upsampleK': 10,
+            'dataflow': "thumb_bk",
+            'dbParameter': 0.012,
+            'alpha': 0.01,
+            'mode': "fixed",
+            'direction': "backward",
+            'train_ratio': 0.6,
+            'trainDataAugment': False,
+            'smoothFc': 1.5,
+            'smoothOrder': 3,
+        }
+    elif configIdx == -1:
         return {
             'LEN_window': 200,
             'upsampleK': 10,

@@ -117,10 +117,24 @@ class DiffusionPolicyInterface:
         S = 2.0*np.array(state) / self.len_window - 1.0
         return S
     
-    def _preprocess_reward(self, reward):
-        R = 1.0-np.array(reward)
+    def _preprocess_reward(self, reward, action):
+        w, r, _, alpha = zip(*action)
+        w, r, alpha = np.array(w), np.array(r), np.array(alpha)
+        cost = np.sum(w * r, axis=1)
+        excess  = cost - alpha * self.bandwidth
+        penalty = (np.maximum(excess, 0.0))**2
+        #--------------------------
+        R = 1.0-np.array(reward) - 0.0*penalty
         return R
     
+    def _observation_mode(self, u, u_predicted, obvMode):
+        if obvMode == "perfect":
+            return u
+        elif obvMode == "predicted":
+            return u_predicted
+        else:
+            raise ValueError(f"Invalid observation mode: {obvMode}")
+
     def sample(self, state: np.ndarray):
         state = self._preprocess_state(state)
         state = torch.as_tensor(state, dtype=torch.float32).to(self.device)
@@ -130,13 +144,16 @@ class DiffusionPolicyInterface:
         return self._from_diffusionQ_action_to_env_action(action[-1])
     
     def train(self, data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+              env=None,
+              clonePolicy: bool = True,
               batch_size: int = 1024,
-              epochs: int = 10):
+              epochs: int = 10,
+              verbose: bool = True):
 
         (state, action, reward, state_next) = data
         S = self._preprocess_state(state)
         A = self._preprocess_action(action)
-        R = self._preprocess_reward(reward)
+        R = self._preprocess_reward(reward, action)
         S_next = self._preprocess_state(state_next)
         # Build loader
         dataset = TensorDataset(
@@ -154,12 +171,12 @@ class DiffusionPolicyInterface:
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
                     # update your model and get new losses
-                    Ld, Lq, loss_critic = self.diffusionQ.update(batch)
+                    Ld, Lq, loss_critic = self.diffusionQ.update(batch, clonePolicy)
                     # update the postfix display to show the most recent values
                     batch_bar.set_postfix({
-                        'Ld':    f'{Ld:.4f}',
-                        'Lq':    f'{Lq:.4f}',
-                        'critic': f'{loss_critic:.4f}'
+                        'Ld':    f'{Ld:.6f}',
+                        'Lq':    f'{Lq:.6f}',
+                        'critic': f'{loss_critic:.6f}'
                     })
             if loss_critic < bestLossCritic:
                 bestLossCritic = loss_critic
@@ -168,10 +185,16 @@ class DiffusionPolicyInterface:
             LdRecord.append(Ld)
             LqRecord.append(Lq)
             lossCriticRecord.append(loss_critic)
-            if ep % (epochs/10) == 0:
-                tqdm.write(f"Epoch {ep:4d}/{epochs:4d}  Avg Ld={np.mean(LdRecord[-int(epochs/10):]):.4f}" + 
-                           f"  Avg Lq={np.mean(LqRecord[-int(epochs/10):]):.4f}" + 
-                           f"  Avg loss_critic={np.mean(lossCriticRecord[-int(epochs/10):]):.4f}")
+            if ep % (epochs/10) == 0 and verbose == True:
+                if env is not None: 
+                    evalResult = self.eval(env, num_windows=500, obvMode="predicted", mode="test", type="data")
+                    avgReward = np.mean(evalResult['rewardRecord'])
+                else:
+                    avgReward = np.nan
+                tqdm.write(f"Epoch {ep:4d}/{epochs:4d}  Avg Ld={np.mean(LdRecord[-int(epochs/10):]):.6f}" + 
+                           f"  Avg Lq={np.mean(LqRecord[-int(epochs/10):]):.6f}" + 
+                           f"  Avg loss_critic={np.mean(lossCriticRecord[-int(epochs/10):]):.6f}" +
+                           f"  Test packet loss={avgReward:.4f}")
 
         info = {
             'LdRecord': LdRecord,
@@ -183,14 +206,16 @@ class DiffusionPolicyInterface:
             'S_next': S_next
         }
         return model_state_dict, info
-
-    def _observation_mode(self, u, u_predicted, obvMode):
-        if obvMode == "perfect":
-            return u
-        elif obvMode == "predicted":
-            return u_predicted
-        else:
-            raise ValueError(f"Invalid observation mode: {obvMode}")
+    
+    def _step(self, env, obvMode):
+        u, u_predicted = env.getStates()
+        u_active = self._observation_mode(u, u_predicted, obvMode)
+        (w, r, M, alpha) = self.sample(u_active)
+        reward = env.applyActions(np.array(w), np.array(r), M, alpha)
+        env.updateStates()
+        u_next, u_next_predicted = env.getStates()
+        u_next_active = self._observation_mode(u_next, u_next_predicted, obvMode)
+        return u_active, (w, r, M, alpha), reward, u_next_active
 
     def eval(self, env, num_windows=1000, obvMode="perfect", mode="test", type="data"):
         env.reset()
@@ -200,13 +225,8 @@ class DiffusionPolicyInterface:
         uRecord = []
         uNextRecord = []
         for window in tqdm(range(num_windows), desc="Evaluation windows"):
-            u, u_predicted = env.getStates()
-            u_active = self._observation_mode(u, u_predicted, obvMode)
-            (w, r, M, alpha) = self.sample(u_active)
-            reward = env.applyActions(np.array(w), np.array(r), M, alpha)
-            env.updateStates()
-            u_next, u_next_predicted = env.getStates()
-            u_next_active = self._observation_mode(u_next, u_next_predicted, obvMode)
+            (u_active, action, reward, u_next_active) = self._step(env, obvMode)
+            (w, r, M, alpha) = action
             #============ Record Results ============
             rewardRecord.append(reward)
             actionsRecord.append((np.array(w), np.array(r), M, alpha))
@@ -221,3 +241,51 @@ class DiffusionPolicyInterface:
         }
         return evalResult
 
+
+    def trainOnline(self, 
+                    env, 
+                    epochs: int = 100,
+                    windowPerEpoch: int = 512,
+                    obvMode: str = "predicted"):
+        env.reset()
+        env.selectMode(mode="train", type="data")
+
+        infoTrain = {
+            'LdRecord': [],
+            'LqRecord': [],
+            'lossCriticRecord': [],
+            'rewardRecord': []
+        }
+        for ep in range(epochs):
+            (stateBuffer, actionBuffer, rewardBuffer, state_nextBuffer) = ([], [], [], [])
+            with tqdm(range(windowPerEpoch), desc=f'Epoch {ep}/{epochs}', unit='window', leave=False) as window_bar:
+                for window in window_bar:
+                    (u_active, action, reward, u_next_active) = self._step(env, obvMode)
+                    (w, r, M, alpha) = action
+                    stateBuffer.append(u_active)  
+                    actionBuffer.append((w, r, M, alpha))
+                    rewardBuffer.append(reward)
+                    state_nextBuffer.append(u_next_active)
+                _, info = self.train(
+                    (stateBuffer, actionBuffer, rewardBuffer, state_nextBuffer), 
+                    env=None, 
+                    clonePolicy=False,
+                    batch_size=windowPerEpoch, 
+                    epochs=1,
+                    verbose=False
+                )
+            infoTrain['LdRecord'].append(info['LdRecord'][0])
+            infoTrain['LqRecord'].append(info['LqRecord'][0])
+            infoTrain['lossCriticRecord'].append(info['lossCriticRecord'][0])
+            infoTrain['rewardRecord'].append(np.mean(np.array(rewardBuffer)))
+            if ep % (epochs/10) == 0:
+                tqdm.write(
+                    f'Epoch {ep:4d}/{epochs:4d}' +
+                    f'Avg. Packet Loss: {np.mean(infoTrain["rewardRecord"][-int(epochs/10):]):.4f}' +
+                    f'  Avg. Ld: {np.mean(infoTrain["LdRecord"][-int(epochs/10):]):.4f}' +
+                    f'  Avg. Lq: {np.mean(infoTrain["LqRecord"][-int(epochs/10):]):.4f}' +
+                    f'  Avg. loss_critic: {np.mean(infoTrain["lossCriticRecord"][-int(epochs/10):]):.4f}'
+                )
+        model_state_dict = self.diffusionQ.state_dict()
+        return model_state_dict, infoTrain
+                   

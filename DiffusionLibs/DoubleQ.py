@@ -29,13 +29,13 @@ import numpy as np
 from tqdm import tqdm
 # ---------------------------------------------------------------------------
 # Q-network
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------()
 class QNetwork(nn.Module):
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
-        hidden_sizes: tuple[int, ...] = (32, 32, 32),
+        hidden_sizes: tuple[int, ...] = (16, 16, 16),
     ):
         super().__init__()
         layers: list[nn.Module] = []

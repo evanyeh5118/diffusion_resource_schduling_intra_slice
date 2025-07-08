@@ -31,6 +31,84 @@ def getEnvConfig(configIdx):
         return {
             'N_user': 3,
             'LEN_window': 200,
+            'dataflow': 'thumb_fr',
+            'r_bar': 5,
+            'B': 80,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == 3:
+        return {
+            'N_user': 3,
+            'LEN_window': 200,
+            'dataflow': 'thumb_bk',
+            'r_bar': 5,
+            'B': 80,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == 4:
+        return {
+            'N_user': 8,
+            'LEN_window': 200,
+            'dataflow': 'thumb_fr',
+            'r_bar': 5,
+            'B': 200,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == 5:
+        return {
+            'N_user': 8,
+            'LEN_window': 200,
+            'dataflow': 'thumb_bk',
+            'r_bar': 5,
+            'B': 200,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == 6:
+        return {
+            'N_user': 10,
+            'LEN_window': 200,
+            'dataflow': 'thumb_fr',
+            'r_bar': 5,
+            'B': 200,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == 7:
+        return {
+            'N_user': 10,
+            'LEN_window': 200,
+            'dataflow': 'thumb_bk',
+            'r_bar': 5,
+            'B': 200,
+            'M_list': [3,4,5],
+            'randomSeed': 999,
+            'alpha_range': (0.01, 1.0),
+            'discrete_alpha_steps': 10,
+            'N_aggregation': 4,
+        }
+    elif configIdx == -1:
+        return {
+            'N_user': 3,
+            'LEN_window': 200,
             'dataflow': 'thumb_bk',
             'r_bar': 5,
             'B': 100,
