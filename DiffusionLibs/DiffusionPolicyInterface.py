@@ -145,10 +145,11 @@ class DiffusionPolicyInterface:
     
     def train(self, data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
               env=None,
-              clonePolicy: bool = True,
               batch_size: int = 1024,
               epochs: int = 10,
-              verbose: bool = True):
+              verbose: bool = True,
+              clonePolicy: bool = True,
+              updateCriticOnly: bool = False):
 
         (state, action, reward, state_next) = data
         S = self._preprocess_state(state)
@@ -166,12 +167,12 @@ class DiffusionPolicyInterface:
         bestLossCritic = float('inf')
         model_state_dict = None
         for ep in range(1, epochs + 1):
-            loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=True, drop_last=True)
+            loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=False, drop_last=True)
             #it = iter(loader) 
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
                     # update your model and get new losses
-                    Ld, Lq, loss_critic = self.diffusionQ.update(batch, clonePolicy)
+                    Ld, Lq, loss_critic = self.diffusionQ.update(batch, clonePolicy, updateCriticOnly)
                     # update the postfix display to show the most recent values
                     batch_bar.set_postfix({
                         'Ld':    f'{Ld:.6f}',
@@ -186,7 +187,7 @@ class DiffusionPolicyInterface:
             LqRecord.append(Lq)
             lossCriticRecord.append(loss_critic)
             if ep % (epochs/10) == 0 and verbose == True:
-                if env is not None: 
+                if env is not None and updateCriticOnly is False: 
                     evalResult = self.eval(env, num_windows=500, obvMode="predicted", mode="test", type="data")
                     avgReward = np.mean(evalResult['rewardRecord'])
                 else:

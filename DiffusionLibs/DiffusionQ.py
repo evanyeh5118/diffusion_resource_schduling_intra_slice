@@ -56,12 +56,14 @@ class DiffusionQLearner(nn.Module):
         # Compute target Q-value via EMA networks 
         with torch.no_grad():
             a_next = self.diffusion_policy_target.target.sample(s_next)     
+            noise  = (0.1*torch.randn_like(a_next)).clamp(-0.5,0.5)
+            a_next = (a_next + noise).clamp(-1, 1)
             q1_next = self.q1_target(s_next, a_next)
             q2_next = self.q2_target(s_next, a_next)
             q_target = r + self.gamma * torch.min(q1_next, q2_next)
          # Current Q estimates
         q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
-        loss = F.mse_loss(q1_pred, q_target) +  F.mse_loss(q2_pred, q_target)
+        loss = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
         # Optimize critics
         self.optimizer_critic.zero_grad()
         loss.backward()
@@ -76,11 +78,13 @@ class DiffusionQLearner(nn.Module):
         s, a = batch[0], batch[1]
         s, a = s.float().to(self.device), a.float().to(self.device)
         # ==================================================
+        with torch.no_grad():
+            norm_term = self.q1(s, a).mean()
         a_est = self.diffusion_policy.approximate_action(s, a)
         q = self.q1(s, a_est)
         Lq = -q.mean()
         Ld = self.diffusion_policy.diffusion_loss(s, a)
-        loss = Ld + self.eta * Lq
+        loss = Ld + (self.eta / (norm_term + 1e-8)) * Lq
         # ==================================================
         self.optimizer_policy.zero_grad()
         loss.backward()
@@ -104,15 +108,18 @@ class DiffusionQLearner(nn.Module):
 
     def update(self, 
                batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-               clonePolicy: bool = True) -> float:
+               clonePolicy: bool = True,
+               updateCriticOnly: bool = False) -> float:
         loss_critic = self._update_critic(batch)
-        if clonePolicy:
-            Ld, Lq = self._update_policy(batch)
-        else:
-            Ld, Lq = 0.0, self._update_policy_online(batch)
-
+        Ld, Lq = 0.0, 0.0
+        if updateCriticOnly is False:
+            if clonePolicy:
+                Ld, Lq = self._update_policy(batch)
+            else:
+                Ld, Lq = 0.0, self._update_policy_online(batch)
+            self.diffusion_policy_target.soft_update()
+            
         # Soft-update EMA targets
-        self.diffusion_policy_target.soft_update()
         self.q1_target.soft_update()
         self.q2_target.soft_update()
 

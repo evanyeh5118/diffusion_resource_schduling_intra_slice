@@ -41,7 +41,7 @@ class QNetwork(nn.Module):
         layers: list[nn.Module] = []
         input_dim = state_dim + action_dim
         for h in hidden_sizes:
-            layers += [nn.Linear(input_dim, h), nn.ReLU()]
+            layers += [nn.Linear(input_dim, h), nn.Mish()]
             input_dim = h
         layers.append(nn.Linear(input_dim, 1))
         self.net = nn.Sequential(*layers)
