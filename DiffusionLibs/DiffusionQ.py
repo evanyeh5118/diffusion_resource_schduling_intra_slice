@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
 from .DiffusionPolicy import DiffusionSchedule, DiffusionPolicy
+from .DiffusionPolicyEfficient import EfficientDiffusionPolicy
 from .DoubleQ import QNetwork, EMATarget
 
 class DiffusionQLearner(nn.Module):
@@ -18,14 +19,14 @@ class DiffusionQLearner(nn.Module):
         tau: float = 0.1,
         lr: float = 5e-2,
         eta: float = 1e-6,
-        dropout_p: float = 0.1,
         device: torch.device = "cuda",
     ):
         super().__init__()
         self.device = torch.device(device)
         # Diffusion policy
         self.sched = DiffusionSchedule().to(self.device)
-        self.diffusion_policy = DiffusionPolicy(state_dim, action_dim, self.sched).to(self.device)
+        #self.diffusion_policy = DiffusionPolicy(state_dim, action_dim, self.sched).to(self.device)
+        self.diffusion_policy = EfficientDiffusionPolicy(state_dim, action_dim, self.sched).to(self.device)
         # Critics
         self.q1 = QNetwork(state_dim, action_dim).to(self.device)
         self.q2 = QNetwork(state_dim, action_dim).to(self.device)
@@ -33,12 +34,9 @@ class DiffusionQLearner(nn.Module):
         self.diffusion_policy_target = EMATarget(self.diffusion_policy, tau).to(self.device)
         self.q1_target = EMATarget(self.q1, tau).to(self.device)
         self.q2_target = EMATarget(self.q2, tau).to(self.device)
-        #self.diffusion_policy_target = EMATarget(self.diffusion_policy, tau).to(self.device)
-
         # Optimizer for both critics
         self.optimizer_critic = torch.optim.Adam(
-            list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr,
-            weight_decay=1e-5
+            list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
         )
         self.optimizer_policy = torch.optim.Adam(
             list(self.diffusion_policy.parameters()), lr=lr
@@ -46,11 +44,9 @@ class DiffusionQLearner(nn.Module):
         # Hyperparams
         self.gamma = gamma
         self.eta = eta
-        self.dropout_p = dropout_p
 
     def sample(self, s: torch.Tensor) -> torch.Tensor:
         return self.diffusion_policy.sample(s)
-
 
     def _update_critic(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a, r, s_next = batch
@@ -69,8 +65,8 @@ class DiffusionQLearner(nn.Module):
         # Optimize critics
         self.optimizer_critic.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q1.parameters(), 10.0)
-        torch.nn.utils.clip_grad_norm_(self.q2.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.q1.parameters(), 5.0)
+        torch.nn.utils.clip_grad_norm_(self.q2.parameters(), 5.0)
         self.optimizer_critic.step()
 
         return loss.item()
@@ -79,22 +75,16 @@ class DiffusionQLearner(nn.Module):
                        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         s, a = batch[0], batch[1]
         s, a = s.float().to(self.device), a.float().to(self.device)
-        # ==== Dropout a_est with probability dropout_p ====
-        if torch.rand(1).item() < self.dropout_p:
-            a_est = a
-        else:
-            a_est = self.diffusion_policy.sample(s)
         # ==================================================
+        a_est = self.diffusion_policy.approximate_action(s, a)
         q = self.q1(s, a_est)
-        with torch.no_grad():
-            scale = torch.mean(self.q1_target(s, a_est))
-        # ==================================================
-        Lq = -self.eta / (scale + 1e-6) * q.mean()
+        Lq = -q.mean()
         Ld = self.diffusion_policy.diffusion_loss(s, a)
-        loss = Ld + Lq
+        loss = Ld + self.eta * Lq
         # ==================================================
         self.optimizer_policy.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 5.0)
         self.optimizer_policy.step()
 
         return Ld.cpu().detach().numpy(), Lq.cpu().detach().numpy()
@@ -119,8 +109,7 @@ class DiffusionQLearner(nn.Module):
         if clonePolicy:
             Ld, Lq = self._update_policy(batch)
         else:
-            Lq = self._update_policy_online(batch)
-            Ld = 0.0
+            Ld, Lq = 0.0, self._update_policy_online(batch)
 
         # Soft-update EMA targets
         self.diffusion_policy_target.soft_update()

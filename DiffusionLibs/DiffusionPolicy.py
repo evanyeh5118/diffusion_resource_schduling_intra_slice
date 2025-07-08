@@ -51,7 +51,7 @@ def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 32, 16), act=nn.Mish):
 
 @dataclass
 class DiffusionSchedule:
-    N: int = 10               # number of noise steps
+    N: int = 15               # number of noise steps
     beta_min: float = 0.1
     beta_max: float = 10.0
 
@@ -99,7 +99,6 @@ class DiffusionPolicy(nn.Module):
         eps_pred = self(a_t, s, t)
         return F.mse_loss(eps_pred, noise)
 
-    #@torch.no_grad()
     def sample(self, s: torch.Tensor) -> torch.Tensor:
         """Reverse diffusion to sample actions given states."""
         B, dev = s.size(0), s.device

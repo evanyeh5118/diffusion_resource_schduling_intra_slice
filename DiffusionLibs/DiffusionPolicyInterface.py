@@ -27,8 +27,8 @@ class DiffusionPolicyInterface:
         self.action_dim = 2 * self.n_users + 2 # [w_i, r_i, M, alpha | i=0,1,...,N-1]
         self.diffusionQ = DiffusionQLearner(
             self.state_dim, self.action_dim, 
-            gamma=gamma, tau=tau, lr=lr, eta=eta, dropout_p=dropout_p,
-            device=device)
+            gamma=gamma, tau=tau, lr=lr, eta=eta,
+            device=device)  
         
     def _from_diffusionQ_action_to_env_action(self, action):
         """Convert RL action to policy parameters (w, r, M, alpha)."""
