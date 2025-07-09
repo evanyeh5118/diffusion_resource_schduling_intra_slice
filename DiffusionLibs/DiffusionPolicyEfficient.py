@@ -67,29 +67,62 @@ class EfficientDiffusionPolicy(nn.Module):
         a0_hat = (a_t - (1 - alpha_bar).sqrt()[:, None] * eps_pred) / alpha_bar.sqrt()[:, None]
         return a0_hat
 
-    @torch.no_grad()
-    def sample(self,
-               s: torch.Tensor,
-               steps: int = 15) -> torch.Tensor:
+    def sample(self, s: torch.Tensor, num_actions: int = 10) -> torch.Tensor:
         """
-        Fast sampling via DPM-Solver (Cheng et al. ’22), with a fixed number of model calls.
-        steps=15 is a good tradeoff :contentReference[oaicite:13]{index=13}.
-        You’ll need to install/integrate the official DPM-Solver implementation.
+        s:            (B, state_dim)
+        num_actions:  how many actions to sample per state
+        returns:      (B, a_dim)  ← averaged over num_actions
         """
-        # pseudocode placeholder for DPM-Solver:
-        # from dpm_solver import DPM_Solver
-        # solver = DPM_Solver(self.eps_net, self.schedule.betas)
-        # return solver.sample(s, steps)
-        #
-        # If you don’t have DPM-Solver handy, fall back to the original loop:
+        B = s.size(0)
+        device = s.device
+
+        # replicate each state num_actions times → (B * num_actions, state_dim)
+        s_rep = s.unsqueeze(1).expand(B, num_actions, -1).reshape(-1, s.size(-1))
+
+        # initial noisy actions for all samples → (B * num_actions, a_dim)
+        a = torch.randn(B * num_actions, self.a_dim, device=device)
+
+        # pre-draw all per-step noises: shape = (N_steps, B * num_actions, a_dim)
+        N_steps = self.schedule.N
+        all_noises = torch.randn(
+            N_steps, B * num_actions, self.a_dim, device=device
+        )
+
+        # reverse diffusion
+        for step in reversed(range(1, N_steps + 1)):
+            i = step - 1
+            b_i = self.schedule.beta[i]
+            a_i = self.schedule.alpha[i]
+            ab_i = self.schedule.alpha_bar[i]
+
+            t = torch.full(
+                (B * num_actions,),
+                step,
+                device=device,
+                dtype=torch.long
+            )
+            eps = self(a, s_rep, t)
+            mean = (a - b_i / (1 - ab_i).sqrt() * eps) / a_i.sqrt()
+
+            noise = all_noises[i] if step > 1 else 0.0
+            a = mean + b_i.sqrt() * noise
+
+        # reshape to (B, num_actions, a_dim)
+        a = a.view(B, num_actions, self.a_dim)
+        # average over the num_actions dimension → (B, a_dim)
+        return a.mean(dim=1)
+    
+
+    '''
+    def sample(self, s: torch.Tensor) -> torch.Tensor:
         a = torch.randn(s.size(0), self.a_dim, device=s.device)
         for i in reversed(range(1, self.schedule.N + 1)):
-            b = self.schedule.beta[i - 1]
+            b_i = self.schedule.beta[i - 1]
             a_i = self.schedule.alpha[i - 1]
-            ab = self.schedule.alpha_bar[i - 1]
-            eps = self(a, s, torch.full((s.size(0),), i,
-                                       device=s.device, dtype=torch.long))
-            mean = (a - b / (1 - ab).sqrt() * eps) / a_i.sqrt()
+            ab_i = self.schedule.alpha_bar[i - 1]
+            eps = self(a, s, torch.full((s.size(0),), i, device=s.device, dtype=torch.long))
+            mean = (a - b_i / (1 - ab_i).sqrt() * eps) / a_i.sqrt()
             noise = torch.randn_like(a) if i > 1 else 0.0
-            a = mean + b.sqrt() * noise
+            a = mean + b_i.sqrt() * noise
         return a
+    '''

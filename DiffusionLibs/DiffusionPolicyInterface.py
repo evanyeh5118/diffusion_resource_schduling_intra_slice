@@ -15,7 +15,7 @@ class DiffusionPolicyInterface:
                  tau: float = 0.1,
                  lr: float = 5e-2,
                  eta: float = 1e-6,
-                 dropout_p: float = 0.1,
+                 n_candidates: int = 20,
                  ):
         self.n_users = envParams['N_user']
         self.max_episode_steps = max_episode_steps
@@ -27,7 +27,7 @@ class DiffusionPolicyInterface:
         self.action_dim = 2 * self.n_users + 2 # [w_i, r_i, M, alpha | i=0,1,...,N-1]
         self.diffusionQ = DiffusionQLearner(
             self.state_dim, self.action_dim, 
-            gamma=gamma, tau=tau, lr=lr, eta=eta,
+            gamma=gamma, tau=tau, lr=lr, eta=eta, n_candidates=n_candidates,
             device=device)  
         
     def _from_diffusionQ_action_to_env_action(self, action):
