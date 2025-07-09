@@ -58,22 +58,12 @@ class DiffusionQLearner(nn.Module):
         return a_N_mean
     
     def update(self, 
-               batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-               clonePolicy: bool = True,
-               updateCriticOnly: bool = False) -> float:
+               batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:
         loss_critic = self._update_critic(batch)
-        Ld, Lq = 0.0, 0.0
-        if updateCriticOnly is False:
-            if clonePolicy:
-                Ld, Lq = self._update_policy(batch)
-            else:
-                Ld, Lq = self._update_policy_Ql(batch)
-            self.diffusion_policy_target.soft_update()
-            
-        # Soft-update EMA targets
+        Ld, Lq = self._update_policy(batch)
+        self.diffusion_policy_target.soft_update()
         self.q1_target.soft_update()
         self.q2_target.soft_update()
-
         return Ld, Lq, loss_critic
 
     def _update_critic(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> float:

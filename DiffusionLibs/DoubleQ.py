@@ -50,6 +50,26 @@ class QNetwork(nn.Module):
         """Compute Q-values for state-action pairs."""
         x = torch.cat([s, a], dim=-1)
         return self.net(x).squeeze(-1)
+    
+class VNetwork(nn.Module):
+    def __init__(
+        self,
+        state_dim: int,
+        hidden_sizes: tuple[int, ...] = (8, 8, 8),
+    ):
+        super().__init__()
+        layers: list[nn.Module] = []
+        input_dim = state_dim 
+        for h in hidden_sizes:
+            layers += [nn.Linear(input_dim, h), nn.Mish()]
+            input_dim = h
+        layers.append(nn.Linear(input_dim, 1))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, s: torch.Tensor) -> torch.Tensor:
+        """Compute V-values for state-action pairs."""
+        return self.net(s).squeeze(-1)
+
 
 # ---------------------------------------------------------------------------
 # EMA target wrapper
@@ -116,97 +136,5 @@ class DoubleQLearner(nn.Module):
             list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
         )
 
-    def update(
-        self,
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-    ) -> float:
-        """
-        Perform a double-Q update step.
-
-        Batch format: (s, a, r, s_next, a_next, done)
-          - s, s_next: shape (B, state_dim)
-          - a, a_next: shape (B, action_dim)
-          - r, done: shape (B,) or (B,1)
-        Returns:
-          scalar total MSE loss over both critics
-        """
-        s, a, r, s_next, a_next, done = batch
-        # Move to correct device
-        s, a = s.to(self.device), a.to(self.device)
-        r = r.to(self.device).squeeze(-1)
-        s_next, a_next = s_next.to(self.device), a_next.to(self.device)
-        done = done.to(self.device).squeeze(-1)
-
-        # Compute target Q-value via EMA networks (clipped double-Q)
-        with torch.no_grad():
-            q1_next = self.q1_target(s_next, a_next)
-            q2_next = self.q2_target(s_next, a_next)
-            q_target = r + self.gamma * (1 - done) * torch.min(q1_next, q2_next)
-
-        # Current Q estimates
-        q1_pred = self.q1(s, a)
-        q2_pred = self.q2(s, a)
-        # MSE losses
-        loss_q1 = F.mse_loss(q1_pred, q_target)
-        loss_q2 = F.mse_loss(q2_pred, q_target)
-        loss = loss_q1 + loss_q2
-
-        # Optimize critics
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        # Soft-update EMA targets
-        self.q1_target.soft_update()
-        self.q2_target.soft_update()
-
-        return loss.item()
 
 
-# ---------------------------------------------------------------------------
-# Offline training helper
-# ---------------------------------------------------------------------------
-
-def offline_dq(
-    data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    state_dim: int,
-    action_dim: int,
-    batch_size: int = 256,
-    epochs: int = 1000,
-    steps_per_epoch: int = 1000,
-    device: str | torch.device = "cpu",
-) -> DoubleQLearner:
-    """
-    Train DoubleQLearner on offline data.
-
-    Args:
-        data: (states, actions, rewards, next_states, dones)
-        state_dim: dimension of state
-        action_dim: dimension of action
-    Returns:
-        Trained DoubleQLearner
-    """
-    dev = torch.device(device)
-    states, actions, rewards, next_states, a_next, dones = data
-    learner = DoubleQLearner(state_dim, action_dim, device=dev)
-
-    # Build loader
-    dataset = TensorDataset(
-        torch.as_tensor(states), torch.as_tensor(actions),
-        torch.as_tensor(rewards), torch.as_tensor(next_states), 
-        torch.as_tensor(a_next), torch.as_tensor(dones)
-    )
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-
-    it = iter(loader)
-    for ep in tqdm(range(1, epochs + 1), desc="Training epochs"):
-        for _ in range(steps_per_epoch):
-            try:
-                batch = next(it)
-            except StopIteration:
-                it = iter(loader)
-                batch = next(it)
-            loss = learner.update(batch)
-        if ep % 50 == 0:
-            print(f"Epoch {ep:4d}  Loss={loss:.4f}")
-    return learner

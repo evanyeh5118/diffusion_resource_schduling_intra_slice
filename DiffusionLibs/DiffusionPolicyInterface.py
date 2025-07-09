@@ -123,9 +123,9 @@ class DiffusionPolicyInterface:
         w, r, alpha = np.array(w), np.array(r), np.array(alpha)
         cost = np.sum(w * r, axis=1)
         excess  = cost - alpha * self.bandwidth
-        penalty = (np.maximum(excess, 0.0))**2
+        penalty = (np.maximum(excess, 0.0)/self.bandwidth)**2
         #--------------------------
-        R = 1.0-np.array(reward) - 0.0*penalty
+        R = 1.0-np.array(reward) - penalty
         return R
     
     def _observation_mode(self, u, u_predicted, obvMode):
@@ -146,9 +146,7 @@ class DiffusionPolicyInterface:
               env=None,
               batch_size: int = 1024,
               epochs: int = 10,
-              verbose: bool = True,
-              clonePolicy: bool = True,
-              updateCriticOnly: bool = False):
+              verbose: bool = True):
 
         (state, action, reward, state_next) = data
         S = self._preprocess_state(state)
@@ -166,13 +164,13 @@ class DiffusionPolicyInterface:
             loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=False, drop_last=True)
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
-                    Ld, Lq, loss_critic = self.diffusionQ.update(batch, clonePolicy, updateCriticOnly)
+                    Ld, Lq, loss_critic = self.diffusionQ.update(batch)
                     batch_bar.set_postfix({'Ld': f'{Ld:.6f}', 'Lq': f'{Lq:.6f}', 'critic': f'{loss_critic:.6f}'})
             LdRecord.append(Ld)
             LqRecord.append(Lq)
             lossCriticRecord.append(loss_critic)
             if ep % (epochs/10) == 0 and verbose == True:
-                if env is not None and updateCriticOnly is False: 
+                if env is not None: 
                     evalResult = self.eval(env, num_windows=500, obvMode="predicted", mode="test", type="data")
                     avgReward = np.mean(evalResult['rewardRecord'])
                 else:
