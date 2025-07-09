@@ -16,6 +16,7 @@ class DiffusionPolicyInterface:
                  lr: float = 5e-2,
                  eta: float = 1e-6,
                  N_action_candidates: int = 20,
+                 iql_tau: float = 0.1,
                  ):
         self.n_users = envParams['N_user']
         self.max_episode_steps = max_episode_steps
@@ -28,7 +29,7 @@ class DiffusionPolicyInterface:
         self.diffusionQ = DiffusionQLearner(
             self.state_dim, self.action_dim, 
             gamma=gamma, tau=tau, lr=lr, eta=eta, N_action_candidates=N_action_candidates,
-            device=device)  
+            iql_tau=iql_tau, device=device)  
         self.N_action_candidates = N_action_candidates    
         
     def _from_diffusionQ_action_to_env_action(self, action):
@@ -146,6 +147,7 @@ class DiffusionPolicyInterface:
               env=None,
               batch_size: int = 1024,
               epochs: int = 10,
+              iql_flag: bool = False,
               verbose: bool = True):
 
         (state, action, reward, state_next) = data
@@ -164,7 +166,7 @@ class DiffusionPolicyInterface:
             loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=False, drop_last=True)
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
-                    Ld, Lq, loss_critic = self.diffusionQ.update(batch)
+                    Ld, Lq, loss_critic = self.diffusionQ.update(batch, iql_flag=iql_flag)
                     batch_bar.set_postfix({'Ld': f'{Ld:.6f}', 'Lq': f'{Lq:.6f}', 'critic': f'{loss_critic:.6f}'})
             LdRecord.append(Ld)
             LqRecord.append(Lq)

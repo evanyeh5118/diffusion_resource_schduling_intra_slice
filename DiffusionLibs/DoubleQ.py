@@ -119,6 +119,7 @@ class DoubleQLearner(nn.Module):
         gamma: float = 0.99,
         tau: float = 0.005,
         lr: float = 3e-4,
+        iql_tau: float = 0.1,
         device: str | torch.device = "cpu",
     ):
         super().__init__()
@@ -135,12 +136,16 @@ class DoubleQLearner(nn.Module):
         self.optimizer_q = torch.optim.Adam(
             list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
         )
+        # V-network
+        self.v_net = VNetwork(state_dim).to(self.device)
+        self.optimizer_v = torch.optim.Adam(self.v_net.parameters(), lr=lr)
+        self.iql_tau = iql_tau
 
-
-    def update(self, s, a, r, s_next, a_next) -> float:
+    def update(self, input_tuple) -> float:
+        s, a, r, s_next, a_next = input_tuple
         with torch.no_grad():
             noise  = (0.1*torch.randn_like(a_next)).clamp(-0.5,0.5)
-            a_next = (a_next + noise).clamp(-1, 1)
+            a_next = (a_next + noise).clamp(-0.5, 0.5)
             q1_next = self.q1_target(s_next, a_next)
             q2_next = self.q2_target(s_next, a_next)
             q_target = r + self.gamma * torch.min(q1_next, q2_next)
@@ -156,3 +161,45 @@ class DoubleQLearner(nn.Module):
         self.q2_target.soft_update()
 
         return loss.item()
+
+    def update_iql(self, input_tuple):
+        """One training step of IQL: 
+           - update V via expectile regression
+           - update Q via Bellman using V for next-state target
+           - update policy via weighted regression on action-approximation
+        """
+        s, a, r, s_next = input_tuple
+        # ---- 1) Update V network via expectile regression  ----
+        with torch.no_grad():
+            q1, q2 = self.q1_target(s, a), self.q2_target(s, a)
+            q_min = torch.min(q1, q2).squeeze(-1)
+        v = self.v_net(s)
+        diff = q_min - v
+        loss_v = self._expectile_loss(diff, self.iql_tau)
+        self.optimizer_v.zero_grad()
+        loss_v.backward()
+        self.optimizer_v.step()
+
+        # ---- 2) Update Q networks ----
+        with torch.no_grad():
+            # target uses V(s') instead of Q
+            v_next = self.v_net(s_next)
+            q_target = r + self.gamma * v_next
+        q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
+        loss_q = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
+        self.optimizer_q.zero_grad()
+        loss_q.backward()
+        torch.nn.utils.clip_grad_norm_(list(self.q1.parameters()) + list(self.q2.parameters()), 100.0)
+        self.optimizer_q.step()
+
+        # ---- 3) Update target networks ----
+        self.q1_target.soft_update()
+        self.q2_target.soft_update()
+
+        return loss_q.item()
+
+    def _expectile_loss(self, diff, tau):
+        # diff = Q(s,a) - V(s)
+        weight = torch.where(diff > 0, tau, 1 - tau)
+        return (weight * (diff ** 2)).mean()
+    
