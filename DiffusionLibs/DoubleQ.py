@@ -132,9 +132,27 @@ class DoubleQLearner(nn.Module):
         # Hyperparams
         self.gamma = gamma
         # Optimizer for both critics
-        self.optimizer = torch.optim.Adam(
+        self.optimizer_q = torch.optim.Adam(
             list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
         )
 
 
+    def update(self, s, a, r, s_next, a_next) -> float:
+        with torch.no_grad():
+            noise  = (0.1*torch.randn_like(a_next)).clamp(-0.5,0.5)
+            a_next = (a_next + noise).clamp(-1, 1)
+            q1_next = self.q1_target(s_next, a_next)
+            q2_next = self.q2_target(s_next, a_next)
+            q_target = r + self.gamma * torch.min(q1_next, q2_next)
+         # Current Q estimates
+        q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
+        loss = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
+        # Optimize critics
+        self.optimizer_q.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(list(self.q1.parameters()) + list(self.q2.parameters()), 5.0)
+        self.optimizer_q.step()
+        self.q1_target.soft_update()
+        self.q2_target.soft_update()
 
+        return loss.item()
