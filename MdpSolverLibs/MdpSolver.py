@@ -24,11 +24,10 @@ class MdpKernel:
         self.aggregationMap = params['aggregationMap']
         self.actionTable = params['actionTable'] 
 
-    def load_policy(self, mdpParams, policyMode='deterministic'):
+    def load_policy(self, mdpParams, policyMode='deterministic', randomR=False):
         self.set_params(mdpParams)
         self.mode = policyMode
-        #self.V_stoch = mdpParams['V_stoch']
-        #self.V_deter = mdpParams['V_deter']
+        self.randomR = randomR
         self.policy_deter = mdpParams['policy_deter']
         self.policy_stoch = mdpParams['policy_stoch']
         if policyMode == "deterministic" and self.policy_deter is None:
@@ -116,12 +115,18 @@ class MdpKernel:
             raise ValueError(f"Invalid mode: {self.mode}")
         (w, alpha, M) = self.actionTable[a]
         uAggregated = index_to_tuple(sAggregated, self.N_aggregation, self.N_user)
-        r = self._getDependentAction(np.array(uAggregated), np.array(w), alpha, self.B)
+        if self.randomR == True:
+            r = self._getRandomAction(w)
+        else:
+            r = self._getDependentAction(np.array(uAggregated), np.array(w), alpha, self.B)
         return (w, r, M, alpha)
     
     def _getDependentAction(self, u, w, alpha, B):
         r = np.floor(alpha*B)/(np.sum(w)+1e-10) * w
         return r
+    
+    def _getRandomAction(self, w):
+        return (np.random.randint(0, self.B, self.N_user)*np.array(w)).astype(int)
     
     def _getReward(self, s: int, a: int):
         """Return *expected* immediate reward ``R(s,a)``."""
