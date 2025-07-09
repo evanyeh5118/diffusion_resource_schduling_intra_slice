@@ -35,7 +35,7 @@ class QNetwork(nn.Module):
         self,
         state_dim: int,
         action_dim: int,
-        hidden_sizes: tuple[int, ...] = (16, 16, 16),
+        hidden_sizes: tuple[int, ...] = (8, 8, 8, 8, 4, 4),
     ):
         super().__init__()
         layers: list[nn.Module] = []

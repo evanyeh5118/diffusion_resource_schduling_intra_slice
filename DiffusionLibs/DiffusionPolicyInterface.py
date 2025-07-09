@@ -15,7 +15,7 @@ class DiffusionPolicyInterface:
                  tau: float = 0.1,
                  lr: float = 5e-2,
                  eta: float = 1e-6,
-                 n_candidates: int = 20,
+                 N_action_candidates: int = 20,
                  ):
         self.n_users = envParams['N_user']
         self.max_episode_steps = max_episode_steps
@@ -27,8 +27,9 @@ class DiffusionPolicyInterface:
         self.action_dim = 2 * self.n_users + 2 # [w_i, r_i, M, alpha | i=0,1,...,N-1]
         self.diffusionQ = DiffusionQLearner(
             self.state_dim, self.action_dim, 
-            gamma=gamma, tau=tau, lr=lr, eta=eta, n_candidates=n_candidates,
+            gamma=gamma, tau=tau, lr=lr, eta=eta, N_action_candidates=N_action_candidates,
             device=device)  
+        self.N_action_candidates = N_action_candidates    
         
     def _from_diffusionQ_action_to_env_action(self, action):
         """Convert RL action to policy parameters (w, r, M, alpha)."""
@@ -135,13 +136,11 @@ class DiffusionPolicyInterface:
         else:
             raise ValueError(f"Invalid observation mode: {obvMode}")
 
-    def sample(self, state: np.ndarray):
-        state = self._preprocess_state(state)
-        state = torch.as_tensor(state, dtype=torch.float32).to(self.device)
-        if state.ndim == 1:
-            state = state.unsqueeze(0)
-        action = self.diffusionQ.sample(state).cpu().detach().numpy()
-        return self._from_diffusionQ_action_to_env_action(action[-1])
+    def sample(self, state: np.ndarray, N_action_candidates: int = 10):
+        s = self._preprocess_state(state)
+        s = torch.as_tensor(s, dtype=torch.float32).unsqueeze(0).to(self.device)
+        a = self.diffusionQ.sample(s, N_action_candidates).cpu().detach().numpy()
+        return self._from_diffusionQ_action_to_env_action(a[-1])
     
     def train(self, data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
               env=None,
@@ -156,7 +155,6 @@ class DiffusionPolicyInterface:
         A = self._preprocess_action(action)
         R = self._preprocess_reward(reward, action)
         S_next = self._preprocess_state(state_next)
-        # Build loader
         dataset = TensorDataset(
             torch.as_tensor(S).to(self.device), torch.as_tensor(A).to(self.device),
             torch.as_tensor(R).to(self.device), torch.as_tensor(S_next).to(self.device), 
@@ -164,25 +162,12 @@ class DiffusionPolicyInterface:
         LdRecord = []
         LqRecord = []
         lossCriticRecord = []
-        bestLossCritic = float('inf')
-        model_state_dict = None
         for ep in range(1, epochs + 1):
             loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=False, drop_last=True)
-            #it = iter(loader) 
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
-                    # update your model and get new losses
                     Ld, Lq, loss_critic = self.diffusionQ.update(batch, clonePolicy, updateCriticOnly)
-                    # update the postfix display to show the most recent values
-                    batch_bar.set_postfix({
-                        'Ld':    f'{Ld:.6f}',
-                        'Lq':    f'{Lq:.6f}',
-                        'critic': f'{loss_critic:.6f}'
-                    })
-            if loss_critic < bestLossCritic:
-                bestLossCritic = loss_critic
-                model_state_dict = self.diffusionQ.state_dict()
-                torch.save(self.diffusionQ.state_dict(), f'Results/DiffusionQ/diffusionQ_best_temp.pth')
+                    batch_bar.set_postfix({'Ld': f'{Ld:.6f}', 'Lq': f'{Lq:.6f}', 'critic': f'{loss_critic:.6f}'})
             LdRecord.append(Ld)
             LqRecord.append(Lq)
             lossCriticRecord.append(loss_critic)
@@ -196,7 +181,6 @@ class DiffusionPolicyInterface:
                            f"  Avg Lq={np.mean(LqRecord[-int(epochs/10):]):.6f}" + 
                            f"  Avg loss_critic={np.mean(lossCriticRecord[-int(epochs/10):]):.6f}" +
                            f"  Test packet loss={avgReward:.4f}")
-
         info = {
             'LdRecord': LdRecord,
             'LqRecord': LqRecord,
@@ -206,12 +190,13 @@ class DiffusionPolicyInterface:
             'A': A,
             'S_next': S_next
         }
+        model_state_dict = self.diffusionQ.state_dict()
         return model_state_dict, info
     
     def _step(self, env, obvMode):
         u, u_predicted = env.getStates()
         u_active = self._observation_mode(u, u_predicted, obvMode)
-        (w, r, M, alpha) = self.sample(u_active)
+        (w, r, M, alpha) = self.sample(u_active, N_action_candidates=self.N_action_candidates)
         reward = env.applyActions(np.array(w), np.array(r), M, alpha)
         env.updateStates()
         u_next, u_next_predicted = env.getStates()

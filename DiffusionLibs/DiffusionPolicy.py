@@ -35,11 +35,11 @@ def timestep_embedding(t: torch.Tensor, dim: int, *, max_period: int = 10_000) -
     return F.pad(emb, (0, dim % 2))  # zero-pad if odd
 
 
-def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 32, 16), act=nn.Mish):
+def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 32, 16)):
     mods: list[nn.Module] = []
     prev = inp
     for h in hidden:
-        mods += [nn.Linear(prev, h), act()]
+        mods += [nn.Linear(prev, h), nn.Mish()]
         prev = h
     mods.append(nn.Linear(prev, out))
     return nn.Sequential(*mods)
@@ -51,7 +51,7 @@ def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 32, 16), act=nn.Mish):
 
 @dataclass
 class DiffusionSchedule:
-    N: int = 15               # number of noise steps
+    N: int = 20               # number of noise steps
     beta_min: float = 0.1
     beta_max: float = 10.0
 

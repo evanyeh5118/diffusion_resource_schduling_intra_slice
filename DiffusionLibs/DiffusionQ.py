@@ -19,7 +19,7 @@ class DiffusionQLearner(nn.Module):
         tau: float = 0.1,
         lr: float = 5e-2,
         eta: float = 1e-6,
-        n_candidates: int = 20,
+        N_action_candidates: int = 20,
         device: torch.device = "cuda",
     ):
         super().__init__()
@@ -45,10 +45,17 @@ class DiffusionQLearner(nn.Module):
         # Hyperparams
         self.gamma = gamma
         self.eta = eta
-        self.n_candidates = n_candidates
+        self.N_action_candidates = N_action_candidates
+        self.a_dim = action_dim
 
-    def sample(self, s: torch.Tensor) -> torch.Tensor:
-        return self.diffusion_policy.sample(s)
+    def sample(self, s: torch.Tensor, N: int = 10) -> torch.Tensor:
+        B = s.size(0)
+        # 1) replicate each state N times → shape (B*N, state_dim)
+        s_rep = s.unsqueeze(1).expand(B, N, s.size(-1)).reshape(-1, s.size(-1))
+        a_N_flat = self.diffusion_policy.sample(s_rep)
+        a_N = a_N_flat.view(B, N, self.a_dim)
+        a_N_mean = a_N.mean(dim=1)
+        return a_N_mean
     
     def update(self, 
                batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
@@ -95,7 +102,7 @@ class DiffusionQLearner(nn.Module):
         return loss.item()
     
     def _greedy_action_approximation(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
-        B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.n_candidates
+        B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.N_action_candidates
         s_rep = s.unsqueeze(1).expand(-1, N, -1).reshape(B * N, D)
         a_rep = a.unsqueeze(1).expand(-1, N, -1).reshape(B * N, A)
         a_cand = self.diffusion_policy.approximate_action(s_rep, a_rep).clamp(-1, 1)  # (B*N, action_dim)
@@ -113,8 +120,6 @@ class DiffusionQLearner(nn.Module):
         """
         # Unpack and move to device
         s, a = batch[0].float().to(self.device), batch[1].float().to(self.device)
-        B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.n_candidates
-
         # 1) Behavior cloning loss
         Ld = self.diffusion_policy.diffusion_loss(s, a)
         # 2) Greedy action approximation

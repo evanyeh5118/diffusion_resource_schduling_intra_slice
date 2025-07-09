@@ -67,50 +67,31 @@ class EfficientDiffusionPolicy(nn.Module):
         a0_hat = (a_t - (1 - alpha_bar).sqrt()[:, None] * eps_pred) / alpha_bar.sqrt()[:, None]
         return a0_hat
 
-    def sample(self, s: torch.Tensor, num_actions: int = 10) -> torch.Tensor:
+    def sample(self, s: torch.Tensor) -> torch.Tensor:
         """
-        s:            (B, state_dim)
-        num_actions:  how many actions to sample per state
-        returns:      (B, a_dim)  ← averaged over num_actions
+        s: (M, state_dim)   — M “replicated” states
+        returns: (M, a_dim) — one action per input row
         """
-        B = s.size(0)
-        device = s.device
+        a = torch.randn(s.size(0), self.a_dim, device=s.device)
 
-        # replicate each state num_actions times → (B * num_actions, state_dim)
-        s_rep = s.unsqueeze(1).expand(B, num_actions, -1).reshape(-1, s.size(-1))
-
-        # initial noisy actions for all samples → (B * num_actions, a_dim)
-        a = torch.randn(B * num_actions, self.a_dim, device=device)
-
-        # pre-draw all per-step noises: shape = (N_steps, B * num_actions, a_dim)
+        # pre-draw all noises
         N_steps = self.schedule.N
-        all_noises = torch.randn(
-            N_steps, B * num_actions, self.a_dim, device=device
-        )
+        noises = torch.randn(N_steps, s.size(0), self.a_dim, device=s.device)
 
-        # reverse diffusion
         for step in reversed(range(1, N_steps + 1)):
             i = step - 1
             b_i = self.schedule.beta[i]
             a_i = self.schedule.alpha[i]
             ab_i = self.schedule.alpha_bar[i]
 
-            t = torch.full(
-                (B * num_actions,),
-                step,
-                device=device,
-                dtype=torch.long
-            )
-            eps = self(a, s_rep, t)
+            t = torch.full((s.size(0),), step, device=s.device, dtype=torch.long)
+            eps = self(a, s, t)
             mean = (a - b_i / (1 - ab_i).sqrt() * eps) / a_i.sqrt()
 
-            noise = all_noises[i] if step > 1 else 0.0
+            noise = noises[i] if step > 1 else 0.0
             a = mean + b_i.sqrt() * noise
 
-        # reshape to (B, num_actions, a_dim)
-        a = a.view(B, num_actions, self.a_dim)
-        # average over the num_actions dimension → (B, a_dim)
-        return a.mean(dim=1)
+        return a
     
 
     '''
