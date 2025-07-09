@@ -35,7 +35,7 @@ def timestep_embedding(t: torch.Tensor, dim: int, *, max_period: int = 10_000) -
     return F.pad(emb, (0, dim % 2))  # zero-pad if odd
 
 
-def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 32, 16)):
+def mlp(inp: int, out: int, hidden: Sequence[int] = (64, 64, 64, 32)):
     mods: list[nn.Module] = []
     prev = inp
     for h in hidden:
@@ -114,55 +114,4 @@ class DiffusionPolicy(nn.Module):
         return a
     
 
-
-# ---------------------------------------------------------------------------
-# Offline BC training (Section 3.1)
-# ---------------------------------------------------------------------------
-
-def offline_bc_train(
-    data: Tuple[np.ndarray, np.ndarray],  # (states, actions)
-    state_dim: int,
-    action_dim: int,
-    batch_size: int = 256,
-    epochs: int = 10,
-    steps_per_epoch: int = 500,
-    device: str | torch.device = "cpu",
-) -> DiffusionPolicy:
-    """
-    Train the diffusion policy with behavior cloning only.
-
-    Returns:
-        Trained DiffusionPolicy on given (s,a) data.
-    """
-    dev = torch.device(device)
-    states, actions = data
-
-    # Move schedule to GPU/CPU
-    sched = DiffusionSchedule().to(dev)
-    policy = DiffusionPolicy(state_dim, action_dim, sched).to(dev)
-    optim = torch.optim.Adam(policy.parameters(), lr=3e-4)
-
-    # Dataset loader
-    ds = TensorDataset(torch.as_tensor(states), torch.as_tensor(actions))
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
-
-    it = iter(loader)
-
-    for ep in tqdm(range(1, epochs + 1), desc="Training epochs"):
-        for _ in range(steps_per_epoch):
-            try:
-                s_batch, a_batch = next(it)
-            except StopIteration:
-                it = iter(loader)
-                s_batch, a_batch = next(it)
-            s_batch = s_batch.float().to(dev)
-            a_batch = a_batch.float().to(dev)
-            loss = policy.diffusion_loss(s_batch, a_batch)
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-        if ep % 50 == 0:
-            print(f"Epoch {ep:4d}  L_d={loss.item():.4f}")
-
-    return policy
 

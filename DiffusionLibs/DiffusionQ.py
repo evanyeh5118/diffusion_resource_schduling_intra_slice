@@ -67,7 +67,7 @@ class DiffusionQLearner(nn.Module):
             if clonePolicy:
                 Ld, Lq = self._update_policy(batch)
             else:
-                Ld, Lq = 0.0, self._update_policy_online(batch)
+                Ld, Lq = self._update_policy_Ql(batch)
             self.diffusion_policy_target.soft_update()
             
         # Soft-update EMA targets
@@ -139,8 +139,35 @@ class DiffusionQLearner(nn.Module):
 
         return Ld.item(), Lq.item()
 
-        
+    def _greedy_sample(self, s: torch.Tensor) -> torch.Tensor:
+        B, D, N = s.shape[0], s.shape[1], self.N_action_candidates
+        s_rep = s.unsqueeze(1).expand(-1, N, -1).reshape(B * N, D)
+        a_cand = self.diffusion_policy.sample(s_rep)
+        q_cand = self.q1(s_rep, a_cand).view(B, N)                # (B, N)
+        best_idx = torch.argmax(q_cand, dim=1)     
+        a_best = a_cand.view(B, N, -1)[torch.arange(B), best_idx]  # (B, action_dim)
+        return a_best
 
+    def _update_policy_Ql(self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> tuple[float, float]:
+        """
+        Offline policy update with N-candidate re-ranking:
+        - Ld: diffusion (BC) loss on dataset actions
+        - Lq: Q-improvement loss using best of N samples
+        Returns (Ld, Lq).
+        """
+        # Unpack and move to device
+        s, a = batch[0].float().to(self.device), batch[1].float().to(self.device)
+        # 2) Greedy action approximation
+        a_best = self._greedy_action_approximation(s, a)
+        # 3) Q-improvement loss
+        q_best = self.q1(s, a_best)                                # (B,)
+        Lq = -self.eta * q_best.mean()                                        # scalar
+        # 4) Backprop & clip
+        self.optimizer_policy.zero_grad()
+        Lq.backward()
+        torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 5.0)
+        self.optimizer_policy.step()
 
+        return 0.0, Lq.item()
 
     
