@@ -54,8 +54,6 @@ class DiffusionQLearner(nn.Module):
                                self.double_q.q2(s_rep, a_cand)).view(B, N)       
             best_idx = torch.argmax(q_cand, dim=1)                     # (B,)
             a_best = a_cand.view(B, N, -1)[torch.arange(B), best_idx]  # (B, action_dim)
-        elif sample_method == "mean":
-            a_best = a_cand.view(B, N, -1).mean(dim=1)
         elif sample_method == "EAS":
             # Q-values for all N candidate actions
             q_min = torch.min(self.double_q.q1(s_rep, a_cand), 
@@ -67,11 +65,6 @@ class DiffusionQLearner(nn.Module):
             a_best = a_cand.view(B, N, -1)[
                 torch.arange(B, device=s.device), idx.squeeze(-1)
             ]
-        elif sample_method == "weighted":
-            q_cand = self.double_q.q1(s_rep, a_cand).view(B, N)
-            logits = q_cand / self.temperature
-            w = torch.softmax(logits, dim=1)                    # (B, N)
-            a_best = (a_cand.view(B, N, -1) * w.unsqueeze(-1)).sum(dim=1)
         else:
             raise ValueError(f"Invalid sample method: {sample_method}")
         return a_best
@@ -84,8 +77,6 @@ class DiffusionQLearner(nn.Module):
         r = r.float().to(self.device).squeeze(-1)
         Q_value_check = self.double_q._Q_value_check(s, a, r)
         if iql_flag == False:
-            #a_next = self.diffusion_policy_target.target.sample(s_next)     
-            #a_next = self.greedy_sample(s_next)
             with torch.no_grad():
                 a_next = self._greedy_action_approximation(s_next, a)
             loss_critic = self.double_q.update((s, a, r, s_next, a_next))
@@ -94,7 +85,6 @@ class DiffusionQLearner(nn.Module):
             loss_critic = self.double_q.update_iql((s, a, r, s_next))
             Ld, Lq = self._update_policy_iql(s, a)
         return Ld, Lq, loss_critic, Q_value_check
-
 
     def _greedy_action_approximation(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.N_action_candidates
