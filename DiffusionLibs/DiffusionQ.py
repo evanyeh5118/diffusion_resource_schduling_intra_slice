@@ -49,18 +49,16 @@ class DiffusionQLearner(nn.Module):
         # 1) replicate each state N times → shape (B*N, state_dim)
         s_rep = s.unsqueeze(1).expand(B, N, s.size(-1)).reshape(-1, s.size(-1))
         a_cand = self.diffusion_policy.sample(s_rep)
+        # Q-values for all N candidate actions
+        q_cand = torch.min(self.double_q.q1_target(s_rep, a_cand), 
+                           self.double_q.q2_target(s_rep, a_cand)).view(B, N)       
         if sample_method == "greedy":
-            q_cand = torch.min(self.double_q.q1(s_rep, a_cand), 
-                               self.double_q.q2(s_rep, a_cand)).view(B, N)       
             best_idx = torch.argmax(q_cand, dim=1)                     # (B,)
             a_best = a_cand.view(B, N, -1)[torch.arange(B), best_idx]  # (B, action_dim)
         elif sample_method == "EAS":
-            # Q-values for all N candidate actions
-            q_min = torch.min(self.double_q.q1(s_rep, a_cand), 
-                              self.double_q.q2(s_rep, a_cand)).view(B, N)              # (B,N)
-            # numerically stable softmax
-            logits = (q_min - q_min.max(dim=1, keepdim=True)[0]) / self.temperature
-            probs  = torch.softmax(logits, dim=1)             # (B,N)
+            mean, std = q_cand.mean(1, keepdim=True), q_cand.std(1, keepdim=True) + 1e-6
+            logits = (q_cand - mean) / (std + 1e-6)
+            probs  = torch.softmax(logits, dim=1)             # (B,N) 
             idx = torch.multinomial(probs, num_samples=1)     # (B,1)
             a_best = a_cand.view(B, N, -1)[
                 torch.arange(B, device=s.device), idx.squeeze(-1)
@@ -78,7 +76,7 @@ class DiffusionQLearner(nn.Module):
         Q_value_check = self.double_q._Q_value_check(s, a, r)
         if iql_flag == False:
             with torch.no_grad():
-                a_next = self._greedy_action_approximation(s_next, a)
+                a_next = self.diffusion_policy_target.target.sample(s_next)
             loss_critic = self.double_q.update((s, a, r, s_next, a_next))
             Ld, Lq = self._update_policy(s, a)
         else:
@@ -97,19 +95,13 @@ class DiffusionQLearner(nn.Module):
         return a_best
         
     def _update_policy(self, s: torch.Tensor, a: torch.Tensor) -> tuple[float, float]:
-        """
-        Offline policy update with N-candidate re-ranking:
-        - Ld: diffusion (BC) loss on dataset actions
-        - Lq: Q-improvement loss using best of N samples
-        Returns (Ld, Lq).
-        """
         # 1) Behavior cloning loss
         Ld = self.diffusion_policy.diffusion_loss(s, a)
         # 2) Greedy action approximation
-        a_best = self._greedy_action_approximation(s, a)
+        a_hat = self.diffusion_policy.approximate_action(s, a) 
         # 3) Q-improvement loss
-        q_best = self.double_q.q1(s, a_best)                                # (B,)
-        Lq = -q_best.mean()                                        # scalar
+        q_hat = self.double_q.q1(s, a_hat)                                # (B,)
+        Lq = -q_hat.mean()                                        # scalar
         # 4) Combined loss
         with torch.no_grad():
             norm_term = self.double_q.q1(s, a).mean()
@@ -131,15 +123,13 @@ class DiffusionQLearner(nn.Module):
         with torch.no_grad():
             q1_hat = self.double_q.q1(s, a).squeeze(-1)
             q2_hat = self.double_q.q2(s, a).squeeze(-1)
-            q_hat = torch.min(q1_hat, q2_hat)
-            v_s = self.double_q.v_net(s)
-            w = torch.exp((q_hat - v_s) / self.temperature).clamp(max=100.0)  # avoid explosion
+            q = torch.min(q1_hat, q2_hat)
+            v = self.double_q.v_net(s)
+            w = torch.exp((q - v) / self.temperature).clamp(max=100.0)  # avoid explosion
 
         # 3) weighted L2 regression:  E[w * ||a - a_hat||^2]
         a_hat = self.diffusion_policy.approximate_action(s, a) 
         Lq = (w * ((a_hat - a) ** 2).sum(dim=-1)).mean()
-        #logp = self.diffusion_policy.log_prob_elbo(s, a)
-        #Lq = -1.0*(w * logp).mean()
         # 4) Combined loss and backprop
         loss_pi = Ld + self.eta * Lq
         self.optimizer_policy.zero_grad()

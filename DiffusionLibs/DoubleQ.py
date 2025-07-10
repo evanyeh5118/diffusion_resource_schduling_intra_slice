@@ -35,7 +35,7 @@ class QNetwork(nn.Module):
         self,
         state_dim: int,
         action_dim: int,
-        hidden_sizes: tuple[int, ...] = (8, 8, 8, 8, 8, 8),
+        hidden_sizes: tuple[int, ...] = (64, 64, 64, 64, 64),
     ):
         super().__init__()
         layers: list[nn.Module] = []
@@ -55,7 +55,7 @@ class VNetwork(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        hidden_sizes: tuple[int, ...] = (8, 8, 8, 8, 8, 8),
+        hidden_sizes: tuple[int, ...] = (64, 64, 64, 64, 64),
     ):
         super().__init__()
         layers: list[nn.Module] = []
@@ -184,7 +184,7 @@ class DoubleQLearner(nn.Module):
         with torch.no_grad():
             # target uses V(s') instead of Q
             v_next = self.v_net(s_next)
-            q_target = r + self.gamma * v_next
+            q_target = (r + self.gamma * v_next).detach()
         q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
         loss_q = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
         self.optimizer_q.zero_grad()

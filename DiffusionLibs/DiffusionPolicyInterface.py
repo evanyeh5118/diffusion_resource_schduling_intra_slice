@@ -126,7 +126,7 @@ class DiffusionPolicyInterface:
         excess  = cost - alpha * self.bandwidth
         penalty = (np.maximum(excess, 0.0)/self.bandwidth)**2
         #--------------------------
-        R = 1.0-np.array(reward) - 10.0*penalty
+        R = 1.0-np.array(reward) - 1000.0*penalty
         return R
     
     def _observation_mode(self, u, u_predicted, obvMode):
