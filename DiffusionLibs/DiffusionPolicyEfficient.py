@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .DiffusionPolicy import DiffusionSchedule, mlp, timestep_embedding
+from .DPM_solver import DpmSolverVP, VPSchedule
 
 class EfficientDiffusionPolicy(nn.Module):
     """
@@ -93,24 +94,12 @@ class EfficientDiffusionPolicy(nn.Module):
 
         return a
     
-    def log_prob_elbo(self, s, a):
-        t = torch.randint(1, self.schedule.N + 1, (a.size(0),), device=a.device)
-        eps = torch.randn_like(a)
-        a_t = self.approximate_action(s, a)
-        eps_hat = self(a_t, s, t)          # εθ(x_t,t|s)
-        coeff = self.schedule.beta[t] / (2 * (1 - self.schedule.alpha_bar[t]) *self.schedule.alpha[t])
-        return (coeff.unsqueeze(-1) * (eps - eps_hat).pow(2)).sum(dim=-1)
-
-    '''
-    def sample(self, s: torch.Tensor) -> torch.Tensor:
-        a = torch.randn(s.size(0), self.a_dim, device=s.device)
-        for i in reversed(range(1, self.schedule.N + 1)):
-            b_i = self.schedule.beta[i - 1]
-            a_i = self.schedule.alpha[i - 1]
-            ab_i = self.schedule.alpha_bar[i - 1]
-            eps = self(a, s, torch.full((s.size(0),), i, device=s.device, dtype=torch.long))
-            mean = (a - b_i / (1 - ab_i).sqrt() * eps) / a_i.sqrt()
-            noise = torch.randn_like(a) if i > 1 else 0.0
-            a = mean + b_i.sqrt() * noise
-        return a
-    '''
+    def sampleFast(self, s: torch.Tensor) -> torch.Tensor:
+        solver = self._build_solver()
+        return solver.sample(s, n_steps=15, order=3)
+    
+    def _build_solver(self, predict_x0: bool = False):
+        sched = VPSchedule(self.schedule)           # convert discrete β’s
+        model_eps = lambda a_t, t: self(a_t, s=None, t=(t * self.schedule.N).long())
+        solver = DpmSolverVP(model_eps, sched, predict_x0=predict_x0)
+        return solver

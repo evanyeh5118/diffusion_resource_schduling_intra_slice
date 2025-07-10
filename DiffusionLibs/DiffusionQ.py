@@ -63,6 +63,8 @@ class DiffusionQLearner(nn.Module):
             a_best = a_cand.view(B, N, -1)[
                 torch.arange(B, device=s.device), idx.squeeze(-1)
             ]
+        elif sample_method == "mean":
+            a_best = a_cand.view(B, N, -1).mean(axis=1)
         else:
             raise ValueError(f"Invalid sample method: {sample_method}")
         return a_best

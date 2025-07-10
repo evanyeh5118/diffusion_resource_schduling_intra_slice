@@ -1,221 +1,209 @@
-import torch
+# dpm_solver_torch.py
+import math, torch
 from torch import Tensor
+from typing import Tuple, List, Dict
 
-class NoiseScheduleVP:
+from .DiffusionPolicy import DiffusionSchedule
+# -----------------------------------------------------------------------------#
+# 1.  Noise schedule helper – adapts your DiffusionSchedule to continuous time #
+# -----------------------------------------------------------------------------#
+
+class VPSchedule:
     """
-    Variance-Preserving (VP) SDE noise schedule for diffusion models.
-    Supports continuous-time scheduling with linear or cosine functions.
+    Wraps the discrete β-schedule (β₁…β_N) you already computed in DiffusionSchedule
+    and turns it into continuous-time primitives needed by DPM-Solver:
+    -  ᾱ(t)  (cum-prod of 1-β)         -> marginal log-mean-coeff
+    -  σ(t)  (sqrt(1-ᾱ(t))             -> marginal std
+    -  λ(t)  = log α(t) – log σ(t)     -> half-logSNR  (monotonic ↔ time)
     """
-    def __init__(self, schedule_type: str = 'linear'):
-        assert schedule_type in ('linear', 'cosine'), "schedule_type must be 'linear' or 'cosine'"
-        self.schedule_type = schedule_type
+    def __init__(self, ds: "DiffusionSchedule"):
+        # store tensors as 1-D column for torch.take_along_dim
+        self.t_array  = torch.linspace(0., 1., ds.N, device=ds.beta.device)
+        self.log_a    = ds.alpha_bar.log().mul(0.5)          # log α_k
+        self.total_N  = ds.N
+        self.T, self.eps = 1., 1. / ds.N                     # [eps, 1]
 
-    def beta_t(self, t: Tensor) -> Tensor:
-        """Instantaneous noise rate beta(t)."""
-        if self.schedule_type == 'linear':
-            # Linear schedule from beta_min to beta_max
-            beta_min, beta_max = 0.1, 20.0
-            return beta_min + t * (beta_max - beta_min)
-        else:
-            # Cosine schedule as in Nichol & Dhariwal
-            s = 0.008
-            return (
-                torch.cos((t + s) / (1 + s) * torch.pi / 2) ** 2
-                / torch.cos(s / (1 + s) * torch.pi / 2) ** 2
-            )
+    # discrete → continuous interpolation (piece-wise linear in λ-space)
+    def _interp(self, t: Tensor, y: Tensor) -> Tensor:
+        # clamp so that eps ≤ t ≤ 1
+        t = t.clamp_(self.eps, self.T)
+        idx = torch.floor(t * self.total_N).long() - 1
+        idx = idx.clamp(0, self.total_N - 2)
+        t0 = self.t_array[idx]; t1 = self.t_array[idx + 1]
+        w  = (t - t0) / (t1 - t0)
+        return (1 - w) * y[idx] + w * y[idx + 1]
 
-    def marginal_log_mean_coeff(self, t: Tensor) -> Tensor:
-        """Compute log(alpha_bar_t) where alpha_bar_t = exp(-∫_0^t beta(s) ds/2)."""
-        if self.schedule_type == 'linear':
-            beta_min, beta_max = 0.1, 20.0
-            # ∫_0^t beta(s) ds = beta_min * t + 0.5 * (beta_max - beta_min) * t^2
-            integral = beta_min * t + 0.5 * (beta_max - beta_min) * t ** 2
-            return -0.5 * integral
-        else:
-            # For cosine schedule, approximate via closed form
-            s = 0.008
-            f = torch.cos((t + s) / (1 + s) * torch.pi / 2) / torch.cos(s / (1 + s) * torch.pi / 2)
-            return torch.log(f)
+    # α(t), σ(t), λ(t)
+    def log_mean_coeff(self, t: Tensor) -> Tensor:
+        return self._interp(t, self.log_a)
 
-    def marginal_alpha(self, t: Tensor) -> Tensor:
-        """Alpha coefficient: sqrt(alpha_bar_t)."""
-        return torch.exp(self.marginal_log_mean_coeff(t))
+    def alpha(self, t: Tensor) -> Tensor:
+        return self.log_mean_coeff(t).exp()
 
-    def marginal_std(self, t: Tensor) -> Tensor:
-        """Standard deviation sigma_t = sqrt(1 - alpha_bar_t)."""
-        alpha_bar = torch.exp(2 * self.marginal_log_mean_coeff(t))
-        return torch.sqrt(1.0 - alpha_bar)
+    def std(self, t: Tensor) -> Tensor:
+        return torch.sqrt(1 - torch.exp(2 * self.log_mean_coeff(t)))
 
-    def marginal_lambda(self, t: Tensor) -> Tensor:
-        """Half-log signal-to-noise ratio: log(alpha_t / sigma_t)."""
-        log_mean = self.marginal_log_mean_coeff(t)
-        log_std = 0.5 * torch.log(1.0 - torch.exp(2 * log_mean))
-        return log_mean - log_std
+    def lambda_(self, t: Tensor) -> Tensor:
+        loga = self.log_mean_coeff(t)
+        return loga - torch.log( self.std(t) )
 
-    def inverse_lambda(self, lam: Tensor) -> Tensor:
-        """Inverse of lambda mapping: find t such that marginal_lambda(t) = lam via Newton's method."""
-        # Initialize t from sigmoid of lam
-        t = torch.sigmoid(-lam)  # heuristic init
-        for _ in range(10):
-            f = self.marginal_lambda(t) - lam
-            # derivative df/dt = beta(t)/2 * (1 + exp(-2*lambda(t)))
-            beta = self.beta_t(t)
-            alpha = torch.exp(self.marginal_log_mean_coeff(t))
-            sigma = torch.sqrt(1 - alpha**2)
-            df_dt = beta * (1 / (2 * sigma**2) + 1 / 2)
-            t = t - f / (df_dt + 1e-5)
-            t = t.clamp(0.0, 1.0)
+    # continuous λ → time  (monotone ⇒ Newton is OK for small N)
+    def inv_lambda(self, lam: Tensor, iters: int = 4) -> Tensor:
+        # init with linear map
+        t = (lam - self.lambda_(torch.tensor(self.eps, device=lam.device))) / \
+            (self.lambda_(torch.tensor(self.T, device=lam.device)) -
+             self.lambda_(torch.tensor(self.eps, device=lam.device)))
+        t = t.clamp(self.eps, self.T)
+        for _ in range(iters):          # Newton iterate λ(t)=lam
+            f = self.lambda_(t) - lam
+            dldt = ( self.lambda_(t + 1e-4) - self.lambda_(t - 1e-4) ) / 2e-4
+            t = (t - f / dldt).clamp(self.eps, self.T)
         return t
+# -----------------------------------------------------------------------------#
+# 2.  Single-step DPM-Solver (orders 1–3) for VP SDE                           #
+# -----------------------------------------------------------------------------#
 
-
-class DPM_Solver:
-    """
-    A PyTorch-compatible implementation of the DPM-Solver for diffusion models.
-    Supports 1st, 2nd, and 3rd-order ODE solvers for fast sampling.
-    """
-    def __init__(
-        self,
-        model_fn,
-        noise_schedule,
-        predict_x0: bool = False,
-        thresholding: bool = False,
-        max_val: float = 1.0,
-        device: torch.device = None,
-    ):
-        self.model_fn = model_fn
-        self.noise_schedule = noise_schedule
+class DpmSolverVP:
+    def __init__(self, model_eps, schedule: VPSchedule, predict_x0=False):
+        """
+        model_eps : callable(x,t)  – your εθ noise-predictor (expects t as int or float Tensor)
+        predict_x0: if True, model returns x₀ directly (cf. DPM-Solver++)
+        """
+        self.m = model_eps
+        self.ns = schedule
         self.predict_x0 = predict_x0
-        self.thresholding = thresholding
-        self.max_val = max_val
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # helpers ------------------------------------------------------------------
+    def _phi(self, h: Tensor, k: int):
+        """φ_k(h)   – expo helpers used in paper (k∈{1,2,3})"""
+        if k == 1:
+            return torch.expm1(h)              # eʰ-1
+        if k == 2:
+            return self._phi(h, 1) / h - 1
+        if k == 3:
+            return self._phi(h, 2) / h - 0.5
+        raise ValueError
+
+    # order-1 (DDIM) -----------------------------------------------------------
+    def _update_1(self, x: Tensor, s: Tensor, t: Tensor,
+                  eps_s: Tensor = None) -> Tuple[Tensor, Tensor]:
+        ns = self.ns
+        h  = ns.lambda_(t) - ns.lambda_(s)
+        if eps_s is None:
+            eps_s = self.m(x, s)
+        if self.predict_x0:
+            alpha_t = ns.alpha(t)
+            phi1 = torch.expm1(-h)
+            x_t = (ns.std(t)/ns.std(s)).unsqueeze(-1) * x - \
+                  (alpha_t * phi1).unsqueeze(-1) * eps_s
+        else:
+            phi1 = self._phi(h, 1)
+            x_t = torch.exp(ns.log_mean_coeff(t) - ns.log_mean_coeff(s)).unsqueeze(-1)*x - \
+                  (ns.std(t)*phi1).unsqueeze(-1)*eps_s
+        return x_t, eps_s
+
+    # order-2 (singlestep) -----------------------------------------------------
+    def _update_2(self, x: Tensor, s: Tensor, t: Tensor,
+                  r1: float = 0.5) -> Tensor:
+        ns = self.ns
+        h   = ns.lambda_(t) - ns.lambda_(s)
+        s1  = ns.inv_lambda(ns.lambda_(s) + r1 * h)
+        x_s1, eps_s = self._update_1(x, s, s1)
+        eps_s1 = self.m(x_s1, s1)
+
+        if self.predict_x0:
+            alpha_t = ns.alpha(t)
+            phi1 = torch.expm1(-h)
+            x_t = (ns.std(t)/ns.std(s)).unsqueeze(-1) * x - \
+                  alpha_t.unsqueeze(-1)*(
+                     phi1 * eps_s + 0.5/r1*phi1 * (eps_s1 - eps_s) )
+        else:
+            phi1 = self._phi(h,1); phi2 = self._phi(h,2)
+            x_t = torch.exp(ns.log_mean_coeff(t)-ns.log_mean_coeff(s)).unsqueeze(-1)*x - \
+                  ns.std(t).unsqueeze(-1)*(
+                       phi1*eps_s + (phi2/r1)* (eps_s1 - eps_s) )
+        return x_t
+
+    # order-3 (singlestep) -----------------------------------------------------
+    def _update_3(self, x: Tensor, s: Tensor, t: Tensor,
+                  r1: float = 1/3, r2: float = 2/3) -> Tensor:
+        ns = self.ns
+        h   = ns.lambda_(t) - ns.lambda_(s)
+
+        s1 = ns.inv_lambda(ns.lambda_(s) + r1 * h)
+        x_s1, eps_s = self._update_1(x, s, s1)
+        eps_s1 = self.m(x_s1, s1)
+
+        s2 = ns.inv_lambda(ns.lambda_(s) + r2 * h)
+        # second sub-step (order-2) to get x_s2
+        phi11 = torch.expm1(-r2*h) if self.predict_x0 else self._phi(r2*h,1)
+        if self.predict_x0:
+            x_s2 = (ns.std(s2)/ns.std(s)).unsqueeze(-1)*x - \
+                   (ns.alpha(s2)*phi11).unsqueeze(-1)*eps_s
+        else:
+            x_s2 = torch.exp(ns.log_mean_coeff(s2)-ns.log_mean_coeff(s)).unsqueeze(-1)*x - \
+                   (ns.std(s2)*phi11).unsqueeze(-1)*eps_s
+        eps_s2 = self.m(x_s2, s2)
+
+        # finite-difference coefficients
+        d1  = ( (eps_s1 - eps_s)/(r1*h).unsqueeze(-1) )
+        d2  = ( (eps_s2 - eps_s)/(r2*h).unsqueeze(-1) - d1 ) / (r2 - r1)
+
+        if self.predict_x0:
+            alpha_t = ns.alpha(t)
+            phi1 = torch.expm1(-h);   phi2 = self._phi(-h,2); phi3 = self._phi(-h,3)
+            x_t = (ns.std(t)/ns.std(s)).unsqueeze(-1)*x - \
+                  alpha_t.unsqueeze(-1)*( phi1*eps_s + phi2*h.unsqueeze(-1)*d1
+                                        + 0.5*phi3*(h**2).unsqueeze(-1)*d2 )
+        else:
+            phi1 = self._phi(h,1); phi2=self._phi(h,2); phi3=self._phi(h,3)
+            x_t = torch.exp(ns.log_mean_coeff(t)-ns.log_mean_coeff(s)).unsqueeze(-1)*x - \
+                  ns.std(t).unsqueeze(-1)*( phi1*eps_s + phi2*h.unsqueeze(-1)*d1
+                                           + 0.5*phi3*(h**2).unsqueeze(-1)*d2 )
+        return x_t
+
+    # public sampler -----------------------------------------------------------
     @torch.no_grad()
-    def sample(
-        self,
-        x_T: Tensor,
-        timesteps: torch.Tensor,
-        orders: list,
-    ) -> Tensor:
+    def sample(self, s: Tensor, n_steps: int = 15, order: int = 3) -> Tensor:
         """
-        Run DPM-Solver sampling from noise x_T through the given timesteps.
-        Args:
-            x_T: initial noise tensor at time T
-            timesteps: 1D tensor of times [t_0, t_1, ..., t_N]
-            orders: list of solver orders for each interval
-        Returns:
-            x_0: generated sample
+        s        : (B, state_dim)  conditioning states
+        n_steps  : NFE budget (15 is default in EDP & Kang-Ma)
+        order    : 1|2|3
+        returns  : one action per row  (same shape as self.m’s first output)
         """
-        x = x_T.to(self.device)
-        for i in range(len(timesteps) - 1):
-            t_cur = timesteps[i]
-            t_next = timesteps[i+1]
-            order = orders[i]
+        B = s.size(0)
+        device = s.device
+        x = torch.randn(B, self.m.output_dim, device=device)
+
+        # time grid (uniform in logSNR = λ) – works best for VP   :contentReference[oaicite:0]{index=0}
+        t = torch.linspace(self.ns.T, self.ns.eps, n_steps + 1, device=device)
+        for i in range(n_steps):
+            s_time = t[i].expand(B)
+            t_time = t[i + 1].expand(B)
             if order == 1:
-                x = self.dpm_solver_first_update(x, t_cur, t_next)
-            elif order == 2:
-                x = self.dpm_solver_second_order_update(x, t_cur, t_next)
-            elif order == 3:
-                x = self.dpm_solver_third_order_update(x, t_cur, t_next)
+                x, _ = self._update_1(x, s_time, t_time)
+            elif order == 2 or (n_steps - i) == 1:
+                x = self._update_2(x, s_time, t_time)
             else:
-                raise ValueError(f"Unsupported order: {order}")
-            if self.thresholding:
-                x = x.clamp(-self.max_val, self.max_val)
-        return x
+                x = self._update_3(x, s_time, t_time)
+        # final prediction x₀
+        if self.predict_x0:
+            return x
+        eps0 = self.m(x, torch.full((B,), self.ns.eps, device=device))
+        alpha0 = self.ns.alpha(torch.tensor(self.eps, device=device))
+        return (x - self.ns.std(torch.tensor(self.eps, device=device)).unsqueeze(-1)*eps0) / alpha0
 
-    def _alpha(self, t: Tensor) -> Tensor:
-        return self.noise_schedule.marginal_alpha(t)
+'''
+# -----------------------------------------------------------------------------#
+# 3.  Plug-in to your EfficientDiffusionPolicy                                 #
+# -----------------------------------------------------------------------------#
 
-    def _sigma(self, t: Tensor) -> Tensor:
-        return self.noise_schedule.marginal_std(t)
-
-    def _lambda(self, t: Tensor) -> Tensor:
-        return self.noise_schedule.marginal_lambda(t)
-
-    def _model_pred(self, x: Tensor, t: Tensor) -> Tensor:
-        """Wrap model_fn to always predict noise epsilon"""
-        eps = self.model_fn(x, t)
-        return eps
-
-    def dpm_solver_first_update(self, x: Tensor, t: Tensor, s: Tensor) -> Tensor:
-        """
-        First-order DPM-Solver (equivalent to DDIM)
-        """
-        lambda_t = self._lambda(t)
-        lambda_s = self._lambda(s)
-        h = lambda_s - lambda_t
-        alpha_t = self._alpha(t)
-        alpha_s = self._alpha(s)
-        sigma_t = self._sigma(t)
-        # predict noise at t
-        e_t = self._model_pred(x, t)
-        # update
-        x_next = (alpha_s / alpha_t) * x - torch.exp(-lambda_s) * (torch.exp(h) - 1) * e_t
-        return x_next
-
-    def singlestep_dpm_solver_second_update(self, x: Tensor, t: Tensor, s: Tensor) -> Tensor:
-        """
-        Second-order single-step DPM-Solver.
-        """
-        lambda_t = self._lambda(t)
-        lambda_s = self._lambda(s)
-        h = lambda_s - lambda_t
-        r = 0.5  # midpoint
-        s1 = torch.scalar_tensor(float(lambda_t + r * h)).to(t)
-        # convert back to time domain
-        t1 = self.noise_schedule.inverse_lambda(s1)
-        # evaluations
-        e_t = self._model_pred(x, t)
-        x_mid = (self._alpha(t1) / self._alpha(t)) * x - torch.exp(-s1) * (torch.exp(r * h) - 1) * e_t
-        e_t1 = self._model_pred(x_mid, t1)
-        # second-order update
-        x_next = (
-            (self._alpha(s) / self._alpha(t)) * x
-            - torch.exp(-lambda_s) * (((1 - r) * torch.exp(h) + r) - 1) * e_t
-            - torch.exp(-lambda_s) * (torch.exp(h) - 1) * r * e_t1
-        )
-        return x_next
-
-    def singlestep_dpm_solver_third_update(self, x: Tensor, t: Tensor, s: Tensor) -> Tensor:
-        """
-        Third-order single-step DPM-Solver.
-        """
-        lambda_t = self._lambda(t)
-        lambda_s = self._lambda(s)
-        h = lambda_s - lambda_t
-        # coefficients for 3rd-order
-        r1 = (3 + torch.sqrt(torch.tensor(3.0))) / 6
-        r2 = (3 - torch.sqrt(torch.tensor(3.0))) / 6
-        s1 = torch.scalar_tensor(float(lambda_t + r1 * h)).to(t)
-        s2 = torch.scalar_tensor(float(lambda_t + r2 * h)).to(t)
-        t1 = self.noise_schedule.inverse_lambda(s1)
-        t2 = self.noise_schedule.inverse_lambda(s2)
-        e_t = self._model_pred(x, t)
-        # first mid
-        x1 = (self._alpha(t1) / self._alpha(t)) * x - torch.exp(-s1) * (torch.exp(r1 * h) - 1) * e_t
-        e_t1 = self._model_pred(x1, t1)
-        # second mid
-        x2 = (self._alpha(t2) / self._alpha(t)) * x - torch.exp(-s2) * (torch.exp(r2 * h) - 1) * e_t
-        e_t2 = self._model_pred(x2, t2)
-        # third-order update
-        x_next = (
-            (self._alpha(s) / self._alpha(t)) * x
-            - torch.exp(-lambda_s) * ((torch.exp(h) - 1) - ((1 - r1) * torch.exp(h) + r1 - 1) - ((1 - r2) * torch.exp(h) + r2 - 1)) * e_t
-            - torch.exp(-lambda_s) * (
-                ((1 - r1) * torch.exp(h) + r1 - 1) * e_t1 + ((1 - r2) * torch.exp(h) + r2 - 1) * e_t2
-            )
-        )
-        return x_next
-
-    def get_time_steps_and_orders(
-        self,
-        num_steps: int,
-        order: int = 2,
-        skip_type: str = 'logSNR',
-    ):
-        """
-        Helper to generate timesteps and solver orders.
-        Returns a tuple (timesteps, orders).
-        """
-        return self.noise_schedule.get_orders_and_timesteps_for_singlestep_solver(
-            order=order, num_steps=num_steps, skip_type=skip_type
-        )
+def build_solver(policy: EfficientDiffusionPolicy,
+                 steps: int = 15,
+                 order: int = 3,
+                 predict_x0: bool = False):
+    sched = VPSchedule(policy.schedule)           # convert discrete β’s
+    model_eps = lambda a_t, t: policy(a_t, s=None, t=(t * policy.schedule.N).long())
+    solver = DpmSolverVP(model_eps, sched, predict_x0=predict_x0)
+    return solver
+'''
