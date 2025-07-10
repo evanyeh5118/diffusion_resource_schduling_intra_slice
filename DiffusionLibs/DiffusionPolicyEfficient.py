@@ -93,6 +93,13 @@ class EfficientDiffusionPolicy(nn.Module):
 
         return a
     
+    def log_prob_elbo(self, s, a):
+        t = torch.randint(1, self.schedule.N + 1, (a.size(0),), device=a.device)
+        eps = torch.randn_like(a)
+        a_t = self.approximate_action(s, a)
+        eps_hat = self(a_t, s, t)          # εθ(x_t,t|s)
+        coeff = self.schedule.beta[t] / (2 * (1 - self.schedule.alpha_bar[t]) *self.schedule.alpha[t])
+        return (coeff.unsqueeze(-1) * (eps - eps_hat).pow(2)).sum(dim=-1)
 
     '''
     def sample(self, s: torch.Tensor) -> torch.Tensor:
