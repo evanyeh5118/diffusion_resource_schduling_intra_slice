@@ -1,9 +1,10 @@
+import torch
 from stable_baselines3 import PPO, A2C, SAC, TD3, DQN
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import NormalActionNoise
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv,SubprocVecEnv
 import time
 import os
 
@@ -55,30 +56,71 @@ def create_environment(simParams, simEnv, obvMode="perfect", num_episodes=5000):
     )
     return Monitor(env)
 
+def make_env(simParams, simEnv, obvMode, timesteps_per_episode, rank=0):
+    """Create a single environment instance."""
+    def _init():
+        env = DRLResourceSchedulingEnv(
+            simParams,
+            simEnv,
+            obvMode,
+            timesteps_per_episode
+        )
+        return Monitor(env)
+    return _init
+
+def create_parallel_environment(simParams, simEnv, obvMode="perfect", 
+                              timesteps_per_episode=5000, n_envs=4):
+    """Create parallel environments."""
+    if n_envs == 1:
+        # Single environment
+        return create_environment(simParams, simEnv, obvMode, timesteps_per_episode)
+    else:
+        # Multiple parallel environments
+        env_fns = [make_env(simParams, simEnv, obvMode, timesteps_per_episode, i) 
+                   for i in range(n_envs)]
+        return SubprocVecEnv(env_fns)
 
 def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentName):
     """Train a DRL agent using the specified algorithm."""    
-    underlying_env = env.unwrapped if hasattr(env, 'unwrapped') else env
     print(f"\n{'='*60}")
     print(f"Training {algorithm_name} as {agentName} Agent")
     print(f"{'='*60}")
     print(f"Total timesteps: {total_timesteps}")
-    print(f"Environment: {underlying_env.n_users} users, {underlying_env.bandwidth} bandwidth")
+    
+    # Handle both single and parallel environments
+    try:
+        if hasattr(env, 'unwrapped'):
+            # Single environment
+            underlying_env = env.unwrapped
+            print(f"Environment: {underlying_env.n_users} users, {underlying_env.bandwidth} bandwidth")
+        elif hasattr(env, 'num_envs'):
+            # Parallel environments (VecEnv)
+            print(f"Environment: {env.num_envs} parallel environments")
+        else:
+            print("Environment: Unknown environment type")
+    except AttributeError:
+        # Fallback if any attribute access fails
+        print("Environment: Parallel environments (details not accessible)")
+    
     print(f"Save path: {save_path}.zip")
+    
     # Get algorithm configuration
     config = get_algorithm_config(algorithm_name, env)
     algorithm_class = config["class"]
     params = config["params"]
+    
     # Create callback to track performance
     callback = TrainingCallback(algorithm_name)
+    
     # Create model
     model = algorithm_class(
         "MlpPolicy", 
         env, 
         verbose=1,
-        device='cpu',
+        device="cuda" if torch.cuda.is_available() else "cpu",
         **params
     )
+    
     # Train the model
     start_time = time.time()
     print("Starting training...")

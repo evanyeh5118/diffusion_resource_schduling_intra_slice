@@ -23,14 +23,49 @@ def evaluate_drl_agent(model, env, algorithm_name: str, eval_seed=None):
     episode_loss_rates = []
     episode_alphas = []
     episode_actions = []
-    obs, _ = env.reset()
+    
+    # Handle different environment reset return formats
+    reset_result = env.reset()
+    if isinstance(reset_result, tuple):
+        if len(reset_result) == 2:
+            obs, _ = reset_result
+        else:
+            obs = reset_result[0]  # Take first element as observation
+    else:
+        obs = reset_result  # Single observation returned
+    
     while True:
         action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
+        step_result = env.step(action)
+        
+        # Handle different step return formats
+        if len(step_result) == 5:
+            obs, reward, terminated, truncated, info = step_result
+        elif len(step_result) == 4:
+            obs, reward, done, info = step_result
+            terminated = done
+            truncated = False
+        else:
+            raise ValueError(f"Unexpected step result length: {len(step_result)}")
+        
         episode_rewards.append(reward)
-        episode_alphas.append(info['alpha'])
+        
+        # Safely extract info values
+        if isinstance(info, dict):
+            if 'alpha' in info:
+                episode_alphas.append(info['alpha'])
+            else:
+                episode_alphas.append(0.0)  # Default value
+                
+            if 'total_packet_loss_rate' in info:
+                episode_loss_rates.append(info['total_packet_loss_rate'])
+            else:
+                episode_loss_rates.append(0.0)  # Default value
+        else:
+            episode_alphas.append(0.0)
+            episode_loss_rates.append(0.0)
+        
         episode_actions.append(action.copy() if hasattr(action, 'copy') else action)
-        episode_loss_rates.append(info['total_packet_loss_rate'])
 
         if terminated or truncated:
             break
