@@ -21,7 +21,7 @@ class DiffusionQLearner(nn.Module):
         eta: float = 1e-6,
         N_action_candidates: int = 20,
         iql_tau: float = 0.1,
-        temperature: float = 3.0,
+        temperature: float = 10.0,
         device: torch.device = "cuda",
     ):
         super().__init__()
@@ -43,23 +43,33 @@ class DiffusionQLearner(nn.Module):
         self.iql_tau = iql_tau
         self.temperature = temperature
 
+    @torch.no_grad()
     def sample(self, s: torch.Tensor, N: int = 10, sample_method: str = "mean") -> torch.Tensor:
         B = s.size(0)
         # 1) replicate each state N times → shape (B*N, state_dim)
         s_rep = s.unsqueeze(1).expand(B, N, s.size(-1)).reshape(-1, s.size(-1))
         a_cand = self.diffusion_policy.sample(s_rep)
         if sample_method == "greedy":
-            a_best = self.greedy_sample(s_rep)
+            q_cand = torch.min(self.double_q.q1(s_rep, a_cand), 
+                               self.double_q.q2(s_rep, a_cand)).view(B, N)       
+            best_idx = torch.argmax(q_cand, dim=1)                     # (B,)
+            a_best = a_cand.view(B, N, -1)[torch.arange(B), best_idx]  # (B, action_dim)
         elif sample_method == "mean":
             a_best = a_cand.view(B, N, -1).mean(dim=1)
         elif sample_method == "EAS":
-            q_cand = torch.min(self.double_q.q1(s_rep, a_cand), self.double_q.q2(s_rep, a_cand)).view(B, N)
-            weights_unnorm = torch.exp(q_cand / self.iql_tau)               # (B, N)
-            idx = torch.multinomial(weights_unnorm, num_samples=1) # (B, 1)
-            a_best = a_cand.view(B, N, -1)[torch.arange(B), idx.squeeze(-1)]
+            # Q-values for all N candidate actions
+            q_min = torch.min(self.double_q.q1(s_rep, a_cand), 
+                              self.double_q.q2(s_rep, a_cand)).view(B, N)              # (B,N)
+            # numerically stable softmax
+            logits = (q_min - q_min.max(dim=1, keepdim=True)[0]) / self.temperature
+            probs  = torch.softmax(logits, dim=1)             # (B,N)
+            idx = torch.multinomial(probs, num_samples=1)     # (B,1)
+            a_best = a_cand.view(B, N, -1)[
+                torch.arange(B, device=s.device), idx.squeeze(-1)
+            ]
         elif sample_method == "weighted":
-            q_cand = torch.min(self.double_q.q1(s_rep, a_cand), self.double_q.q2(s_rep, a_cand)).view(B, N)
-            logits = q_cand / self.iql_tau
+            q_cand = self.double_q.q1(s_rep, a_cand).view(B, N)
+            logits = q_cand / self.temperature
             w = torch.softmax(logits, dim=1)                    # (B, N)
             a_best = (a_cand.view(B, N, -1) * w.unsqueeze(-1)).sum(dim=1)
         else:
@@ -72,6 +82,7 @@ class DiffusionQLearner(nn.Module):
         s, a, r, s_next = batch
         s, a, s_next = s.float().to(self.device), a.float().to(self.device), s_next.float().to(self.device)
         r = r.float().to(self.device).squeeze(-1)
+        Q_value_check = self.double_q._Q_value_check(s, a, r)
         if iql_flag == False:
             #a_next = self.diffusion_policy_target.target.sample(s_next)     
             #a_next = self.greedy_sample(s_next)
@@ -82,16 +93,8 @@ class DiffusionQLearner(nn.Module):
         else:
             loss_critic = self.double_q.update_iql((s, a, r, s_next))
             Ld, Lq = self._update_policy_iql(s, a)
-        return Ld, Lq, loss_critic
+        return Ld, Lq, loss_critic, Q_value_check
 
-    def greedy_sample(self, s_next: torch.Tensor) -> torch.Tensor:
-        B, D, N = s_next.shape[0], s_next.shape[1], self.N_action_candidates
-        s_next_rep = s_next.unsqueeze(1).expand(-1, N, -1).reshape(B * N, D)
-        a_next_cand = self.diffusion_policy.sample(s_next_rep)
-        q_cand = torch.min(self.double_q.q1(s_next_rep, a_next_cand), self.double_q.q2(s_next_rep, a_next_cand)).view(B, N)       
-        best_idx = torch.argmax(q_cand, dim=1)                     # (B,)
-        a_next = a_next_cand.view(B, N, -1)[torch.arange(B), best_idx]  # (B, action_dim)
-        return a_next
 
     def _greedy_action_approximation(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.N_action_candidates
@@ -143,7 +146,6 @@ class DiffusionQLearner(nn.Module):
             w = torch.exp((q_hat - v_s) / self.temperature).clamp(max=100.0)  # avoid explosion
 
         # 3) weighted L2 regression:  E[w * ||a - a_hat||^2]
-        #a_hat = self._greedy_action_approximation(s, a)
         a_hat = self.diffusion_policy.approximate_action(s, a) 
         Lq = (w * ((a_hat - a) ** 2).sum(dim=-1)).mean()
         #logp = self.diffusion_policy.log_prob_elbo(s, a)
