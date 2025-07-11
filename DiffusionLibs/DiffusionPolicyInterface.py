@@ -14,7 +14,8 @@ class DiffusionPolicyInterface:
                  gamma: float = 0.99,
                  tau: float = 0.1,
                  lr: float = 5e-2,
-                 eta: float = 1e-6,
+                 Lq_weight: float = 1.0,
+                 Ld_weight: float = 1.0,
                  N_action_candidates: int = 20,
                  iql_tau: float = 0.1,
                  temperature: float = 10.0,
@@ -29,7 +30,8 @@ class DiffusionPolicyInterface:
         self.action_dim = 2 * self.n_users + 2 # [w_i, r_i, M, alpha | i=0,1,...,N-1]
         self.diffusionQ = DiffusionQLearner(
             self.state_dim, self.action_dim, 
-            gamma=gamma, tau=tau, lr=lr, eta=eta, N_action_candidates=N_action_candidates,
+            gamma=gamma, tau=tau, lr=lr, Lq_weight=Lq_weight, Ld_weight=Ld_weight, 
+            N_action_candidates=N_action_candidates,
             iql_tau=iql_tau, temperature=temperature, device=device)  
         self.N_action_candidates = N_action_candidates    
         
@@ -126,7 +128,7 @@ class DiffusionPolicyInterface:
         excess  = cost - alpha * self.bandwidth
         penalty = (np.maximum(excess, 0.0)/self.bandwidth)**2
         #--------------------------
-        R = 1.0-np.array(reward) - 1000.0*penalty
+        R = 1.0-np.array(reward) - 0.0*penalty
         return R
     
     def _observation_mode(self, u, u_predicted, obvMode):
@@ -160,22 +162,23 @@ class DiffusionPolicyInterface:
             torch.as_tensor(S).to(self.device), torch.as_tensor(A).to(self.device),
             torch.as_tensor(R).to(self.device), torch.as_tensor(S_next).to(self.device), 
         )
-        loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=False, drop_last=True)
+        
         LdRecord = []
         LqRecord = []
         lossCriticRecord = []
-        Q_value_checkRecord = []
+        estRewardRecord = []
         best_Lq = np.inf
         for ep in range(1, epochs + 1):
             self.diffusionQ.train()
+            loader = DataLoader(dataset, batch_size=min(batch_size, len(S)), shuffle=True, drop_last=True)
             with tqdm(loader, desc=f'Epoch {ep}/{epochs}', unit='batch', leave=False) as batch_bar:
                 for batch in batch_bar:
-                    Ld, Lq, loss_critic, Q_value_check = self.diffusionQ.update(batch, iql_flag=iql_flag)
-                    batch_bar.set_postfix({'Ld': f'{Ld:.6f}', 'Lq': f'{Lq:.6f}', 'critic': f'{loss_critic:.6f}', 'Q_value_check': f'{Q_value_check:.6f}'})
+                    Ld, Lq, loss_critic, est_reward = self.diffusionQ.update(batch, iql_flag=iql_flag)
+                    batch_bar.set_postfix({'Ld': f'{Ld:.6f}', 'Lq': f'{Lq:.6f}', 'critic': f'{loss_critic:.6f}', 'est_reward': f'{est_reward:.6f}'})
             LdRecord.append(Ld)
             LqRecord.append(Lq)
             lossCriticRecord.append(loss_critic)
-            Q_value_checkRecord.append(Q_value_check)
+            estRewardRecord.append(est_reward)
             if Lq < best_Lq:
                 best_Lq = Lq
                 model_state_dict = self.diffusionQ.state_dict()
@@ -195,12 +198,12 @@ class DiffusionPolicyInterface:
                            f"  Avg Lq={np.mean(LqRecord[-int(epochs/10):]):.6f}" + 
                            f"  Avg loss_critic={np.mean(lossCriticRecord[-int(epochs/10):]):.6f}" +
                            f"  Test packet loss={avgReward:.4f}" +
-                           f"  Avg Q_value_check={np.mean(Q_value_checkRecord[-int(epochs/10):]):.6f}")
+                           f"  Avg est_reward={np.mean(estRewardRecord[-int(epochs/10):]):.6f}")
         info = {
             'LdRecord': LdRecord,
             'LqRecord': LqRecord,
             'lossCriticRecord': lossCriticRecord,
-            'Q_value_checkRecord': Q_value_checkRecord,
+            'estRewardRecord': estRewardRecord,
             'R': R,
             'S': S,
             'A': A,
@@ -243,3 +246,43 @@ class DiffusionPolicyInterface:
             "uNextRecord": uNextRecord
         }
         return evalResult
+
+    def train_online(self, env,
+              batch_size: int = 128,
+              epochs: int = 10,
+              iql_flag: bool = False,
+              sample_method: str = "mean",
+              obvMode: str = "perfect",
+              num_windows: int = 1000,
+              mode: str = "test",
+              type: str = "data",
+              verbose: bool = True):
+        env.reset()
+        env.selectMode(mode=mode, type=type)
+
+        LdRecord = []
+        LqRecord = []
+        lossCriticRecord = []
+        with tqdm(range(num_windows), desc="Training windows") as window_bar:
+            uData, aData, rData, uNextData = [], [], [], []
+            for window in window_bar:
+                (u_active, action, reward, u_next_active) = self._step(env, obvMode, sample_method)
+                uData.append(u_active); aData.append(action); rData.append(reward); uNextData.append(u_next_active)
+                dataset = (uData, aData, rData, uNextData)
+                if window % batch_size == 0:
+                    model_state_dict, info =self.train(data=dataset,
+                        env=env,
+                        batch_size=batch_size,
+                        epochs=epochs,
+                        iql_flag=iql_flag,
+                        sample_method=sample_method,
+                        verbose=verbose)
+                    LdRecord += info['LdRecord']
+                    LqRecord += info['LqRecord']
+                    lossCriticRecord += info['lossCriticRecord']
+                window_bar.set_postfix({'Ld': f'{np.mean(LdRecord[-int(num_windows/batch_size):]):.6f}',
+                                        'Lq': f'{np.mean(LqRecord[-int(num_windows/batch_size):]):.6f}', 
+                                        'loss_critic': f'{np.mean(lossCriticRecord[-int(num_windows/batch_size):]):.6f}'})
+                uData, aData, rData, uNextData = [], [], [], []
+        return model_state_dict, info
+        

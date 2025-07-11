@@ -203,7 +203,7 @@ class DoubleQLearner(nn.Module):
         weight = torch.where(diff > 0, tau, 1 - tau)
         return (weight * (diff ** 2)).mean()
     
-    def _Q_value_check(self, s, a, r):
-        q1 = self.q1(s, a)
-        return (q1 - r).abs().mean().item()
+    def estimate_reward(self, s, a):
+        q = torch.min(self.q1(s, a), self.q2(s, a))
+        return q.mean().item()
     

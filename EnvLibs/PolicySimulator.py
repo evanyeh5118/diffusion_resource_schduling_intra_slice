@@ -7,14 +7,16 @@ class PolicySimulator:
         self.policy = policy
         self.env = env
     
-    def runSimulation(self, policy, num_windows=1000, obvMode="perfect", mode="test", type="data"):
+    def runSimulation(self, policy, num_windows=1000, 
+                      obvMode="perfect", mode="test", type="data",
+                      verbose=True):
         self.env.reset()
         self.env.selectMode(mode=mode, type=type)
         rewardRecord = []   
         actionsRecord = []
         uRecord = []
         uNextRecord = []
-        with tqdm(range(num_windows), desc="Simulation Progress") as window_bar:
+        with tqdm(range(num_windows), desc="Simulation Progress", disable=not verbose) as window_bar:
             for window in window_bar:
                 u, u_predicted = self.env.getStates()
                 if obvMode == "perfect":

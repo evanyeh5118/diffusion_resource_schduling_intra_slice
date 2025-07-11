@@ -50,7 +50,7 @@ def mlp(inp: int, out: int, hidden: Sequence[int] = (256, 256, 256)):
 
 @dataclass
 class DiffusionSchedule:
-    N: int = 100              # number of noise steps
+    N: int = 30              # number of noise steps
     beta_min: float = 0.1
     beta_max: float = 10.0
 

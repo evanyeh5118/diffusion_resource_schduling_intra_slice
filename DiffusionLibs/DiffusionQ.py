@@ -22,7 +22,8 @@ class DiffusionQLearner(nn.Module):
         gamma: float = 0.99,
         tau: float = 0.1,
         lr: float = 5e-2,
-        eta: float = 1e-6,
+        Lq_weight: float = 1.0,
+        Ld_weight: float = 1.0,
         N_action_candidates: int = 20,
         iql_tau: float = 0.1,
         temperature: float = 10.0,
@@ -42,7 +43,8 @@ class DiffusionQLearner(nn.Module):
         self.double_q = DoubleQLearner(state_dim, action_dim, gamma, tau, lr, iql_tau, device).to(self.device)
         # Hyperparams
         self.gamma = gamma
-        self.eta = eta
+        self.Lq_weight = Lq_weight
+        self.Ld_weight = Ld_weight
         self.N_action_candidates = N_action_candidates
         self.a_dim = action_dim
         self.iql_tau = iql_tau
@@ -80,7 +82,7 @@ class DiffusionQLearner(nn.Module):
         s, a, r, s_next = batch
         s, a, s_next = s.float().to(self.device), a.float().to(self.device), s_next.float().to(self.device)
         r = r.float().to(self.device).squeeze(-1)
-        Q_value_check = self.double_q._Q_value_check(s, a, r)
+        est_reward = self.double_q.estimate_reward(s, a)
         if iql_flag == False:
             with torch.no_grad():
                 a_next = self.diffusion_policy_target.target.sample(s_next)
@@ -89,7 +91,7 @@ class DiffusionQLearner(nn.Module):
         else:
             loss_critic = self.double_q.update_iql((s, a, r, s_next))
             Ld, Lq = self._update_policy_iql(s, a)
-        return Ld, Lq, loss_critic, Q_value_check
+        return Ld, Lq, loss_critic, est_reward
 
     def _greedy_action_approximation(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
         B, D, A, N = s.shape[0], s.shape[1], a.shape[1], self.N_action_candidates
@@ -112,7 +114,7 @@ class DiffusionQLearner(nn.Module):
         # 4) Combined loss
         with torch.no_grad():
             norm_term = self.double_q.q1(s, a).mean()
-        loss = Ld + (self.eta / (norm_term + 1e-8)) * Lq
+        loss = self.Ld_weight * Ld + (self.Lq_weight / (norm_term + 1e-8)) * Lq
         # 5) Backprop & clip
         self.optimizer_policy.zero_grad()
         loss.backward()
@@ -138,7 +140,7 @@ class DiffusionQLearner(nn.Module):
         a_hat = self.diffusion_policy.approximate_action(s, a) 
         Lq = (w * ((a_hat - a) ** 2).sum(dim=-1)).mean()
         # 4) Combined loss and backprop
-        loss_pi = Ld + self.eta * Lq
+        loss_pi = self.Ld_weight * Ld + self.Lq_weight * Lq
         self.optimizer_policy.zero_grad()
         loss_pi.backward()
         torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 5.0)
@@ -146,6 +148,8 @@ class DiffusionQLearner(nn.Module):
         self.diffusion_policy_target.soft_update()
 
         return Ld.item(), Lq.item()
+    
+    
     
 
 
