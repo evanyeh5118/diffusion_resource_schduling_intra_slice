@@ -28,6 +28,7 @@ class Environment:
         self.simulatorType2 = SimulatorType2(params)
         self.trafficGenerator = trafficGenerator
         self.u = self.trafficGenerator.updateTraffic()
+        self.N_user = params['N_user']
 
     def selectMode(self, mode="train", type="markov"):
         self.trafficGenerator.selectModeAndType(mode=mode, type=type)
