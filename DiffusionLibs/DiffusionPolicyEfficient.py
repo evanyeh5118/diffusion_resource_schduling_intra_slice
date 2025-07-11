@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .DiffusionPolicy import DiffusionSchedule, mlp, timestep_embedding
-from .DPM_solver import DpmSolverVP, VPSchedule
 
 class EfficientDiffusionPolicy(nn.Module):
     """
@@ -47,16 +46,14 @@ class EfficientDiffusionPolicy(nn.Module):
 
     def approximate_action(self,
                            s: torch.Tensor,
-                           a0: torch.Tensor,
-                           t: torch.Tensor = None) -> torch.Tensor:
+                           a0: torch.Tensor) -> torch.Tensor:
         """
         One‐step action approximation (Eq. 9 in Kang & Ma) :contentReference[oaicite:11]{index=11}:
           â0 = (a_t - √(1-ᾱ_t) · ϵθ(a_t, s, t)) / √ᾱ_t
         If t is not provided, pick uniformly at random.
         """
         B = a0.size(0)
-        if t is None:
-            t = torch.randint(1, self.schedule.N + 1, (B,), device=a0.device)
+        t = torch.randint(1, self.schedule.N + 1, (B,), device=a0.device)
         alpha_bar = self.schedule.alpha_bar[t - 1]
         noise = torch.randn_like(a0)
         # corrupt
@@ -94,12 +91,4 @@ class EfficientDiffusionPolicy(nn.Module):
 
         return a
     
-    def sampleFast(self, s: torch.Tensor) -> torch.Tensor:
-        solver = self._build_solver()
-        return solver.sample(s, n_steps=15, order=3)
     
-    def _build_solver(self, predict_x0: bool = False):
-        sched = VPSchedule(self.schedule)           # convert discrete β’s
-        model_eps = lambda a_t, t: self(a_t, s=None, t=(t * self.schedule.N).long())
-        solver = DpmSolverVP(model_eps, sched, predict_x0=predict_x0)
-        return solver

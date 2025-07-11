@@ -4,9 +4,13 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
+torch.backends.cuda.matmul.allow_tf32 = True   # affects matmul / linear layers
+torch.backends.cudnn.allow_tf32 = True         # optional: affects convolutions
+
 from .DiffusionPolicy import DiffusionSchedule, DiffusionPolicy
 from .DiffusionPolicyEfficient import EfficientDiffusionPolicy
 from .DoubleQ import DoubleQLearner, EMATarget
+from .dpm_solver_interface import DPMSolver
 
 class DiffusionQLearner(nn.Module):
     """Holds two Q-networks and their EMA targets, with update logic."""
@@ -28,6 +32,7 @@ class DiffusionQLearner(nn.Module):
         self.device = torch.device(device)
         # Diffusion policy
         self.sched = DiffusionSchedule().to(self.device)
+        #self.diffusion_policy = DiffusionPolicy(state_dim, action_dim, self.sched).to(self.device)
         self.diffusion_policy = EfficientDiffusionPolicy(state_dim, action_dim, self.sched).to(self.device)
         self.diffusion_policy_target = EMATarget(self.diffusion_policy, tau).to(self.device)
         self.optimizer_policy = torch.optim.Adam(
@@ -43,7 +48,7 @@ class DiffusionQLearner(nn.Module):
         self.iql_tau = iql_tau
         self.temperature = temperature
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def sample(self, s: torch.Tensor, N: int = 10, sample_method: str = "mean") -> torch.Tensor:
         B = s.size(0)
         # 1) replicate each state N times → shape (B*N, state_dim)
@@ -141,3 +146,11 @@ class DiffusionQLearner(nn.Module):
         self.diffusion_policy_target.soft_update()
 
         return Ld.item(), Lq.item()
+    
+
+
+'''
+if not hasattr(self, "dpmSolver"):
+    self.dpmSolver = DPMSolver(self.diffusion_policy, steps=15, order=3, algorithm='dpmsolver')
+a_cand = self.dpmSolver.sample(s_rep)
+'''
