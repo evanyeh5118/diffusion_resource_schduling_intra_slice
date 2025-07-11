@@ -1,0 +1,31 @@
+{
+  "config_idx": 1,
+  "algorithm": "PPO",
+  "env_config": {
+    "N_user": 4,
+    "LEN_window": 200,
+    "dataflow": "thumb_bk",
+    "r_bar": 5,
+    "B": 100,
+    "M_list": [
+      3,
+      4,
+      5
+    ],
+    "randomSeed": 999,
+    "alpha_range": [
+      0.01,
+      1.0
+    ],
+    "discrete_alpha_steps": 10,
+    "N_aggregation": 4
+  },
+  "avg_reward": -0.02868160602165791,
+  "std_reward": 0.025321320249336334,
+  "avg_loss_rate": 0.03355248014292939,
+  "std_loss_rate": 0.002230521692916669,
+  "avg_alpha": 0.42166054828777916,
+  "training_timesteps": 401408,
+  "experiment_duration": 464.949504,
+  "save_path": "Results/AllExperiments_20250710_145114\\Config1\\PPO"
+}

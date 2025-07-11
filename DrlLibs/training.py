@@ -7,6 +7,8 @@ from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.vec_env import DummyVecEnv,SubprocVecEnv
 import time
 import os
+import numpy as np
+from collections import deque
 
 from DrlLibs import DRLResourceSchedulingEnv
 from DrlLibs.DRL_config import (
@@ -16,34 +18,52 @@ from DrlLibs.DRL_config import (
 )
 
 class TrainingCallback(BaseCallback):
-    """Custom callback to track detailed training performance."""
+    """Simple callback to track reward progress during training (no early stopping)."""
     
-    def __init__(self, algorithm_name: str, verbose=0):
+    def __init__(self, algorithm_name: str, log_interval: int = 16, 
+                 moving_avg_window: int = 100, verbose=0):
         super().__init__(verbose)
         self.algorithm_name = algorithm_name
-        self.episode_rewards = []
-        self.episode_lengths = []
-        self.episode_alphas = []
+        self.log_interval = log_interval
+        self.moving_avg_window = moving_avg_window
+        
+        self.timesteps_log = []
+        self.rewards_log = []
+        self.cumulative_rewards = []
+        self.total_reward = 0.0
+        
+        self.reward_buffer = deque(maxlen=moving_avg_window)
+        self.moving_avg_rewards = []
+        
         self.episode_loss_rates = []
-        self.timesteps = []
-        self.episodes = 0
-    
+        self.episode_timesteps = []
+        self.episodes_seen = 0
+
     def _on_step(self) -> bool:
-        # Track per-step metrics
-        if len(self.locals.get('infos', [])) > 0:
-            info = self.locals['infos'][0]
-            
-            # Check if episode ended
-            if 'episode' in info or self.locals.get('dones', [False])[0]:
-                self.episodes += 1
-                
-                # Log episode metrics
+        rewards = self.locals.get('rewards', [])
+        if len(rewards) > 0:
+            reward = rewards[0]
+            self.total_reward += reward
+            self.reward_buffer.append(reward)
+            if self.num_timesteps % self.log_interval == 0:
+                self.timesteps_log.append(self.num_timesteps)
+                self.rewards_log.append(reward)
+                self.cumulative_rewards.append(self.total_reward)
+                if len(self.reward_buffer) >= min(self.moving_avg_window // 2, 10):
+                    current_moving_avg = np.mean(list(self.reward_buffer))
+                    self.moving_avg_rewards.append(current_moving_avg)
+        infos = self.locals.get('infos', [])
+        dones = self.locals.get('dones', [])
+        if len(infos) > 0 and len(dones) > 0:
+            info = infos[0]
+            done = dones[0]
+            if done and info:
+                self.episodes_seen += 1
                 if 'total_packet_loss_rate' in info:
                     self.episode_loss_rates.append(info['total_packet_loss_rate'])
-                    self.timesteps.append(self.num_timesteps)
-        
-        return True
-    
+                    self.episode_timesteps.append(self.num_timesteps)
+        return True  # Always continue training
+
 
 def create_environment(simParams, simEnv, obvMode="perfect", num_episodes=5000):
     """Create and return the resource scheduling environment."""
@@ -80,12 +100,14 @@ def create_parallel_environment(simParams, simEnv, obvMode="perfect",
                    for i in range(n_envs)]
         return SubprocVecEnv(env_fns)
 
-def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentName):
-    """Train a DRL agent using the specified algorithm."""    
+def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentName,
+                   moving_avg_window: int = 100):
+    """Train a DRL agent using the specified algorithm with early stopping based on moving average."""    
     print(f"\n{'='*60}")
     print(f"Training {algorithm_name} as {agentName} Agent")
     print(f"{'='*60}")
     print(f"Total timesteps: {total_timesteps}")
+    print(f"Moving average window: {moving_avg_window} data points")
     
     # Handle both single and parallel environments
     try:
@@ -109,8 +131,10 @@ def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentN
     algorithm_class = config["class"]
     params = config["params"]
     
-    # Create callback to track performance
-    callback = TrainingCallback(algorithm_name)
+    # Create callback to track performance with early stopping
+    callback = TrainingCallback(algorithm_name, log_interval=16, 
+                               moving_avg_window=moving_avg_window,
+                               verbose=1)
     
     # Create model
     model = algorithm_class(
@@ -131,7 +155,14 @@ def train_drl_agent(algorithm_name: str, env, total_timesteps, save_path, agentN
     os.makedirs(save_path, exist_ok=True)
     model.save(f"{save_path}/{agentName}.zip")
     
-    print(f"{algorithm_name} training completed in {training_time:.2f} seconds")
+    # Print training summary
+    print(f"\n{'='*60}")
+    print(f"Training Summary")
+    print(f"{'='*60}")
+    print(f"Training completed normally")
+    print(f"Total timesteps: {callback.num_timesteps}")
+    
+    print(f"Training time: {training_time:.2f} seconds")
     print(f"Model saved to: {save_path}/{agentName}.zip")
     
     return model, callback, training_time

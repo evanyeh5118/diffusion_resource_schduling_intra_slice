@@ -1,0 +1,31 @@
+{
+  "config_idx": 1,
+  "algorithm": "TD3",
+  "env_config": {
+    "N_user": 4,
+    "LEN_window": 200,
+    "dataflow": "thumb_bk",
+    "r_bar": 5,
+    "B": 100,
+    "M_list": [
+      3,
+      4,
+      5
+    ],
+    "randomSeed": 999,
+    "alpha_range": [
+      0.01,
+      1.0
+    ],
+    "discrete_alpha_steps": 10,
+    "N_aggregation": 4
+  },
+  "avg_reward": -0.011924748711320937,
+  "std_reward": 0.009572371647379124,
+  "avg_loss_rate": 0.01237212142134009,
+  "std_loss_rate": 0.0019262859254835175,
+  "avg_alpha": 0.36408671864002945,
+  "training_timesteps": 400000,
+  "experiment_duration": 723.411419,
+  "save_path": "Results/AllExperiments_20250710_145114\\Config1\\TD3"
+}

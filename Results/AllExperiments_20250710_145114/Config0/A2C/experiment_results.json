@@ -1,0 +1,31 @@
+{
+  "config_idx": 0,
+  "algorithm": "A2C",
+  "env_config": {
+    "N_user": 4,
+    "LEN_window": 200,
+    "dataflow": "thumb_fr",
+    "r_bar": 5,
+    "B": 100,
+    "M_list": [
+      3,
+      4,
+      5
+    ],
+    "randomSeed": 999,
+    "alpha_range": [
+      0.01,
+      1.0
+    ],
+    "discrete_alpha_steps": 10,
+    "N_aggregation": 4
+  },
+  "avg_reward": -0.00930395594659003,
+  "std_reward": 0.009569154042017879,
+  "avg_loss_rate": 0.011432251642428377,
+  "std_loss_rate": 0.00086923448115732,
+  "avg_alpha": 0.01,
+  "training_timesteps": 400000,
+  "experiment_duration": 321.551199,
+  "save_path": "Results/AllExperiments_20250710_145114\\Config0\\A2C"
+}
