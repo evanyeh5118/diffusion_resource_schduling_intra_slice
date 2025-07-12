@@ -39,6 +39,7 @@ class DiffusionQLearner(nn.Module):
         self.optimizer_policy = torch.optim.Adam(
             list(self.diffusion_policy.parameters()), lr=lr
         )
+        self.scheduler_policy = torch.optim.lr_scheduler.ExponentialLR(self.optimizer_policy, gamma=0.99)
         # Double Q-learning
         self.double_q = DoubleQLearner(state_dim, action_dim, gamma, tau, lr, iql_tau, device).to(self.device)
         # Hyperparams
@@ -47,7 +48,6 @@ class DiffusionQLearner(nn.Module):
         self.Ld_weight = Ld_weight
         self.N_action_candidates = N_action_candidates
         self.a_dim = action_dim
-        self.iql_tau = iql_tau
         self.temperature = temperature
 
     @torch.inference_mode()
@@ -120,6 +120,7 @@ class DiffusionQLearner(nn.Module):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 5.0)
         self.optimizer_policy.step()
+        self.scheduler_policy.step()
         self.diffusion_policy_target.soft_update()
 
         return Ld.item(), Lq.item()
@@ -145,6 +146,7 @@ class DiffusionQLearner(nn.Module):
         loss_pi.backward()
         torch.nn.utils.clip_grad_norm_(self.diffusion_policy.parameters(), 5.0)
         self.optimizer_policy.step()
+        self.scheduler_policy.step()
         self.diffusion_policy_target.soft_update()
 
         return Ld.item(), Lq.item()

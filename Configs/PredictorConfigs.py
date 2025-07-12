@@ -41,7 +41,7 @@ def getPredictorConfig(configIdx):
             'smoothFc': 1.5,
             'smoothOrder': 3,
         }
-    elif configIdx == 4:
+    elif configIdx == 5:
         return {
             'LEN_window': 200,
             'upsampleK': 10,
@@ -55,7 +55,7 @@ def getPredictorConfig(configIdx):
             'smoothFc': 1.5,
             'smoothOrder': 3,
         }
-    elif configIdx == 5:
+    elif configIdx == 4:
         return {
             'LEN_window': 200,
             'upsampleK': 10,

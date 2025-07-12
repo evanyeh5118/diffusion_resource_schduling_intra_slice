@@ -136,10 +136,13 @@ class DoubleQLearner(nn.Module):
         self.optimizer_q = torch.optim.Adam(
             list(self.q1.parameters()) + list(self.q2.parameters()), lr=lr
         )
+        self.scheduler_q = torch.optim.lr_scheduler.ExponentialLR(self.optimizer_q, gamma=0.99)
         # V-network
         self.v_net = VNetwork(state_dim).to(self.device)
         self.optimizer_v = torch.optim.Adam(self.v_net.parameters(), lr=lr)
+        self.scheduler_v = torch.optim.lr_scheduler.ExponentialLR(self.optimizer_v, gamma=0.99)
         self.iql_tau = iql_tau
+
 
     def update(self, input_tuple) -> float:
         s, a, r, s_next, a_next = input_tuple
@@ -151,10 +154,10 @@ class DoubleQLearner(nn.Module):
             q_target = r + self.gamma * torch.min(q1_next, q2_next)
          # Current Q estimates
         q1_pred, q2_pred = self.q1(s, a), self.q2(s, a)
-        loss = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
+        loss_q = F.mse_loss(q1_pred, q_target) + F.mse_loss(q2_pred, q_target)
         # Optimize critics
         self.optimizer_q.zero_grad()
-        loss.backward()
+        loss_q.backward()
         torch.nn.utils.clip_grad_norm_(list(self.q1.parameters()) + list(self.q2.parameters()), 5.0)
         self.optimizer_q.step()
         self.q1_target.soft_update()
@@ -179,6 +182,7 @@ class DoubleQLearner(nn.Module):
         self.optimizer_v.zero_grad()
         loss_v.backward()
         self.optimizer_v.step()
+        self.scheduler_v.step()
 
         # ---- 2) Update Q networks ----
         with torch.no_grad():
@@ -195,6 +199,7 @@ class DoubleQLearner(nn.Module):
         # ---- 3) Update target networks ----
         self.q1_target.soft_update()
         self.q2_target.soft_update()
+        self.scheduler_q.step()
 
         return loss_q.item()
 
